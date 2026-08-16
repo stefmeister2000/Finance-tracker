@@ -1,0 +1,32 @@
+{
+  "name": "finance-tracker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n web,api -c blue,green \"vite\" \"node server/index.js\"",
+    "dev:web": "vite",
+    "dev:api": "node server/index.js",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.10.0",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "pdfjs-dist": "^4.10.38",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.12.7",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/uuid": "^9.0.8",
+    "@vitejs/plugin-react": "^4.3.3",
+    "concurrently": "^10.0.3",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}
