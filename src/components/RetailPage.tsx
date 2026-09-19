@@ -57,7 +57,7 @@ export default function RetailPage({ ws, setData }: Props) {
   const avgCost = products.length > 0 ? products.reduce((s, p) => s + goodsCost(p), 0) / products.length : 0
 
   return (
-    <div>
+    <div className="clear-page retail-page">
       <div className="page-header">
         <h2 style={{ margin: 0 }}>Retail &amp; Wholesale</h2>
         <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>
@@ -67,20 +67,20 @@ export default function RetailPage({ ws, setData }: Props) {
 
       <div className="panel">
         <div className="panel-header">
-          <h2>Retail Partners</h2>
-          <p>Add a retailer, their purchase terms (Inkoop), and the margin they keep. Wholesale price = your price minus their margin.</p>
+          <h2>Retail partners ({partners.length})</h2>
+          <p>Manage partner details here. Compare your wholesale earnings below.</p>
           <button className="btn secondary small" onClick={addPartner}>+ Add Retailer</button>
         </div>
 
         {partners.length === 0 ? (
           <div className="empty-state">No retail partners yet — click Add Retailer to start.</div>
         ) : (
-          <div className="scroll-x">
+          <div className="scroll-x retailer-register">
             <table>
               <thead>
                 <tr>
                   <th>Retail</th>
-                  <th>Inkoop (purchase terms)</th>
+                  <th>Purchase terms</th>
                   <th style={{ textAlign: 'right' }}>Margin</th>
                   <th>Products</th>
                   <th>Status</th>
@@ -93,7 +93,7 @@ export default function RetailPage({ ws, setData }: Props) {
                   const linkedCount = (r.productIds ?? []).length
                   return (
                     <tr key={r.id}>
-                      <td>
+                      <td data-label="Retailer">
                         <input
                           type="text"
                           className="table-input"
@@ -103,7 +103,7 @@ export default function RetailPage({ ws, setData }: Props) {
                           placeholder="Retailer name"
                         />
                       </td>
-                      <td>
+                      <td data-label="Purchase terms">
                         <input
                           type="text"
                           className="table-input"
@@ -113,7 +113,7 @@ export default function RetailPage({ ws, setData }: Props) {
                           placeholder="e.g. 30-50 SKU"
                         />
                       </td>
-                      <td style={{ textAlign: 'right' }}>
+                      <td data-label="Retailer margin" style={{ textAlign: 'right' }}>
                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                           <input
                             type="number"
@@ -129,7 +129,7 @@ export default function RetailPage({ ws, setData }: Props) {
                           <span style={{ color: 'var(--text-muted)' }}>%</span>
                         </div>
                       </td>
-                      <td>
+                      <td data-label="Products stocked">
                         <select
                           className="table-input"
                           value=""
@@ -151,7 +151,7 @@ export default function RetailPage({ ws, setData }: Props) {
                           ))}
                         </select>
                       </td>
-                      <td>
+                      <td data-label="Status">
                         <select
                           className="table-input"
                           value={r.status ?? 'prospect'}
@@ -163,7 +163,7 @@ export default function RetailPage({ ws, setData }: Props) {
                           <option value="paused">Paused</option>
                         </select>
                       </td>
-                      <td>
+                      <td data-label="Notes">
                         <input
                           type="text"
                           className="table-input"
@@ -173,7 +173,7 @@ export default function RetailPage({ ws, setData }: Props) {
                           placeholder="Contact, order cadence…"
                         />
                       </td>
-                      <td className="actions">
+                      <td data-label="Actions" className="actions">
                         <button className="btn ghost small" onClick={() => { if (confirm(`Remove "${r.name}"?`)) removePartner(r.id) }}>✕</button>
                       </td>
                     </tr>
@@ -188,7 +188,7 @@ export default function RetailPage({ ws, setData }: Props) {
       {partners.length > 0 && products.length > 0 && (
         <div className="panel">
           <div className="panel-header">
-            <h2>Wholesale Economics</h2>
+            <h2>Wholesale profitability</h2>
             <p>What each retailer's margin does to your per-product profit. Wholesale price = net price × (1 − their margin).</p>
           </div>
           <div className="scroll-x">

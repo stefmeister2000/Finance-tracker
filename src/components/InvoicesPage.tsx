@@ -1,7 +1,9 @@
-import { useCurrency } from '../CurrencyContext'
-import { useState } from 'react'
+import NewFolder from './NewFolder'
+import { invoiceFolders, invoiceFolder, deleteInvoiceFolder } from '../folders'
+import { downloadDataUrl, openDataUrl } from '../fileDownloads'
+import { useRef, useState } from 'react'
 import { v4 as uuid } from 'uuid'
-import type { AppData, Invoice, InvoiceStatus, InvoiceType, WorkspaceData } from '../types'
+import type { AccountingDocument, AppData, Invoice, InvoiceStatus, InvoiceType, WorkspaceData } from '../types'
 import { monthLabel, updateActiveWorkspace } from '../storage'
 import { formatCurrency } from '../utils'
 
@@ -31,274 +33,135 @@ function nextInvoiceNumber(invoices: Invoice[], type: InvoiceType): string {
   return `${prefix}${String(max + 1).padStart(3, '0')}`
 }
 
-function csvEscape(v: string | number): string {
-  const s = String(v)
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
-}
-
-/** Downloads a stored data-URL file reliably by converting it to a Blob first.
- *  (Large `data:` URLs and opening them in a tab are blocked by browsers; a Blob URL is not.) */
-function downloadDataUrl(dataUrl: string, fileName: string) {
-  try {
-    const [meta, b64] = dataUrl.split(',')
-    const mime = /:(.*?);/.exec(meta)?.[1] ?? 'application/octet-stream'
-    const bin = atob(b64)
-    const arr = new Uint8Array(bin.length)
-    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i)
-    const url = URL.createObjectURL(new Blob([arr], { type: mime }))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = fileName
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
-  } catch {
-    // Fallback: direct data-URL download (works for small files).
-    const a = document.createElement('a')
-    a.href = dataUrl
-    a.download = fileName
-    a.click()
-  }
-}
-
-/** Opens a stored data-URL file in a new tab via a Blob URL (browsers block `data:` navigation). */
-function openDataUrl(dataUrl: string) {
-  try {
-    const [meta, b64] = dataUrl.split(',')
-    const mime = /:(.*?);/.exec(meta)?.[1] ?? 'application/octet-stream'
-    const bin = atob(b64)
-    const arr = new Uint8Array(bin.length)
-    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i)
-    const url = URL.createObjectURL(new Blob([arr], { type: mime }))
-    window.open(url, '_blank', 'noopener,noreferrer')
-    setTimeout(() => URL.revokeObjectURL(url), 60000)
-  } catch {
-    /* ignore */
-  }
-}
-
-export default function InvoicesPage({ ws, setData }: Props) {
-  const { fmt, curr } = useCurrency()
-  const [selectedMonth, setSelectedMonth] = useState<string>('all')
-
-  const allInvoices = ws.invoices ?? []
-
-  // Build sorted list of months that have invoices
-  const months = Array.from(new Set(allInvoices.map((i) => i.date.slice(0, 7)))).sort().reverse()
-
-  const invoices = selectedMonth === 'all' ? allInvoices : allInvoices.filter((i) => i.date.startsWith(selectedMonth))
-  const byDateDesc = (a: Invoice, b: Invoice) => b.date.localeCompare(a.date)
-  const incomeInvoices = invoices.filter((i) => i.type === 'income').sort(byDateDesc)
-  const expenseInvoices = invoices.filter((i) => i.type === 'expense').sort(byDateDesc)
-
-  const totalIncome = incomeInvoices.reduce((s, i) => s + i.amount, 0)
-  const totalExpenses = expenseInvoices.reduce((s, i) => s + i.amount, 0)
-  const paidIncome = incomeInvoices.filter((i) => i.status === 'paid').reduce((s, i) => s + i.amount, 0)
-  const unpaidIncome = totalIncome - paidIncome
-  const overdueCount = invoices.filter(isOverdue).length
-  const outstanding = invoices
-    .filter((i) => i.status !== 'paid')
-    .reduce((s, i) => s + (i.type === 'income' ? i.amount : -i.amount), 0)
-
-  function addInvoice(type: InvoiceType) {
-    setData((prev) =>
-      updateActiveWorkspace(prev, (w) => ({
-        ...w,
-        invoices: [
-          ...(w.invoices ?? []),
-          {
-            id: uuid(),
-            type,
-            number: nextInvoiceNumber(w.invoices ?? [], type),
-            party: type === 'income' ? 'New Client' : 'New Vendor',
-            description: '',
-            amount: 0,
-            date: new Date().toISOString().slice(0, 10),
-            status: 'unpaid',
-          },
-        ],
-      })),
-    )
-  }
+export default function InvoicesPage({ data, ws, setData }: Props) {
+  const uploadInput = useRef<HTMLInputElement>(null)
+  const [year, setYear] = useState(new Date().getFullYear())
+  const [month, setMonth] = useState<string | null>(null)
+  const [folder, setFolder] = useState<AccountingDocument['folder'] | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [search, setSearch] = useState('')
+  const [fileView, setFileView] = useState<'list' | 'cards'>('cards')
+  const documents = ws.accountingDocuments ?? []
+  const invoices = ws.invoices ?? []
+  const folders = month ? invoiceFolders(ws, month) : []
+  const activeFolder = folders.find((f) => f.id === folder)
+  const folderInvoices = invoices.filter((i) => i.date.slice(0, 7) === month && invoiceFolder(i) === folder)
+  const files = documents.filter((d) => d.month === month && d.folder === folder).sort((a, b) => a.name.localeCompare(b.name))
+  const visibleFiles = files.filter((d) => d.name.toLowerCase().includes(search.toLowerCase()))
+  const count = (m: string, f?: AccountingDocument['folder']) =>
+    documents.filter((d) => d.month === m && (!f || d.folder === f)).length +
+    invoices.filter((i) => i.date.slice(0, 7) === m && (!f || invoiceFolder(i) === f)).length
 
   function updateInvoice(id: string, updates: Partial<Invoice>) {
-    setData((prev) =>
-      updateActiveWorkspace(prev, (w) => ({
-        ...w,
-        invoices: (w.invoices ?? []).map((i) => (i.id === id ? { ...i, ...updates } : i)),
-      })),
-    )
+    setData((prev) => updateActiveWorkspace(prev, (w) => ({ ...w, invoices: (w.invoices ?? []).map((i) => i.id === id ? { ...i, ...updates } : i) })))
   }
-
   function removeInvoice(id: string) {
-    if (!confirm('Delete this invoice? This cannot be undone from the invoice list.')) return
-    setData((prev) =>
-      updateActiveWorkspace(prev, (w) => ({
-        ...w,
-        invoices: (w.invoices ?? []).filter((i) => i.id !== id),
-      })),
-    )
+    if (confirm('Delete this invoice and its attachment?')) setData((prev) => updateActiveWorkspace(prev, (w) => ({ ...w, invoices: (w.invoices ?? []).filter((i) => i.id !== id) })))
   }
-
-  function exportCsv() {
-    const rows = [
-      ['Number', 'Type', 'Party', 'Description', 'Date', 'Due date', 'Amount', 'Currency', 'Status', 'Overdue'],
-      ...[...invoices].sort(byDateDesc).map((i) => [
-        i.number ?? '', i.type, i.party, i.description, i.date, i.dueDate ?? '',
-        i.amount.toFixed(2), ws.currency, i.status, isOverdue(i) ? 'yes' : 'no',
-      ]),
-    ]
-    const csv = rows.map((r) => r.map(csvEscape).join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `invoices-${ws.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${selectedMonth === 'all' ? 'all' : selectedMonth}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+  async function upload(list: FileList | null) {
+    if (!list?.length || !month || !folder || busy) return
+    const destination = { month, folder }
+    const workspaceId = data.activeWorkspace
+    setBusy(true)
+    setError('')
+    try {
+      const selected = Array.from(list)
+      if (selected.some((f) => f.size > 10 * 1024 * 1024)) throw new Error('Please choose files smaller than 10 MB each.')
+      if (selected.reduce((sum, f) => sum + f.size, 0) > 30 * 1024 * 1024) throw new Error('Please upload up to 30 MB at a time.')
+      const added = await Promise.all(selected.map(async (file): Promise<AccountingDocument> => ({
+        id: uuid(), ...destination, name: file.name, size: file.size, uploadedAt: new Date().toISOString(),
+        data: await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(String(reader.result))
+          reader.onerror = () => reject(new Error(`Could not read ${file.name}. Please try again.`))
+          reader.readAsDataURL(file)
+        }),
+      })))
+      setData((prev) => {
+        const workspace = prev.workspaces[workspaceId]
+        if (!workspace) return prev
+        return { ...prev, workspaces: { ...prev.workspaces, [workspaceId]: { ...workspace, accountingDocuments: [...(workspace.accountingDocuments ?? []), ...added] } } }
+      })
+    } catch (err) { setError(err instanceof Error ? err.message : 'Upload failed. Please try again.') }
+    finally { setBusy(false) }
   }
-
-  // Month-by-month accounting summary (always across all invoices)
-  const monthlySummary = months.map((m) => {
-    const list = allInvoices.filter((i) => i.date.startsWith(m))
-    const inc = list.filter((i) => i.type === 'income').reduce((s, i) => s + i.amount, 0)
-    const exp = list.filter((i) => i.type === 'expense').reduce((s, i) => s + i.amount, 0)
-    const open = list.filter((i) => i.status !== 'paid').reduce((s, i) => s + (i.type === 'income' ? i.amount : -i.amount), 0)
-    return { m, inc, exp, net: inc - exp, open, count: list.length }
-  })
 
   return (
-    <div>
+    <div className="invoice-drive">
       <div className="page-header">
-        <h2 style={{ margin: 0 }}>Invoices</h2>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <select
-            className="table-input"
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(e.target.value)}
-            style={{ minWidth: 160 }}
-          >
-            <option value="all">All months</option>
-            {months.map((m) => (
-              <option key={m} value={m}>{monthLabel(m)}</option>
-            ))}
-          </select>
-          {invoices.length > 0 && (
-            <button className="btn ghost small" onClick={exportCsv} title="Export the current view as CSV for your accountant">
-              ⬇ Export CSV
+        <div><h2 style={{ margin: 0 }}>Invoices & files</h2><p className="drive-muted">All your accounting documents, organised by month.</p></div>
+        <button className="btn ghost small" title="Restore this page in Settings → General" onClick={() => setData((prev) => updateActiveWorkspace(prev, (w) => ({ ...w, hideInvoices: true })))}>Hide page</button>
+      </div>
+      <nav className="drive-path" aria-label="Folder path">
+        <button className="btn ghost small" onClick={() => { setMonth(null); setFolder(null); setError(''); setSearch(''); setSearch('') }}>{ws.name} / {year}</button>
+        {month && <><span>/</span><button className="btn ghost small" onClick={() => { setFolder(null); setError(''); setSearch('') }}>{monthLabel(month)}</button></>}
+        {activeFolder && <><span>/</span><strong>{activeFolder.name}</strong></>}
+      </nav>
+      {month && <div className="folder-management">
+        <NewFolder key={month} names={folders.map(f => f.name)} disabled={busy} onAdd={(name) => {
+          const added = { id: uuid(), name, icon: '📁', hint: 'Uploaded documents' }
+          setData((prev) => updateActiveWorkspace(prev, (w) => ({ ...w, invoiceFolders: { ...w.invoiceFolders, [month]: [...invoiceFolders(w, month), added] } })))
+          setFolder(added.id); setSearch('')
+        }} />
+        {folder && folder !== 'unfiled' && <button className="btn ghost small danger" disabled={busy} onClick={() => {
+          if (!confirm(`Delete “${activeFolder?.name}” from ${monthLabel(month)}? Its files and invoice records will be moved to Unfiled. No files will be deleted.`)) return
+          setData((prev) => updateActiveWorkspace(prev, (w) => deleteInvoiceFolder(w, month, folder)))
+          setFolder(null); setSearch('')
+        }}>Delete folder</button>}
+      </div>}
+      {!month ? <>
+        <div className="drive-toolbar"><h3>Monthly folders</h3><label>Year <input aria-label="Folder year" type="number" min="2000" max="2100" value={year} onChange={(e) => { const y = Number(e.target.value); if (y >= 2000 && y <= 2100) setYear(y) }} /></label></div>
+        <div className="drive-grid">
+          {Array.from({ length: 12 }, (_, index) => {
+            const m = `${year}-${String(index + 1).padStart(2, '0')}`
+            return <button className="drive-folder" key={m} onClick={() => setMonth(m)}>
+              <span className="drive-icon">📁</span><strong>{new Date(year, index, 1).toLocaleString('en', { month: 'long' })}</strong>
+              <span className="drive-muted">{count(m)} items · {invoiceFolders(ws, m).length} folders</span>
             </button>
-          )}
+          })}
         </div>
-      </div>
+      </> : !folder ? <>
+        <h3>{monthLabel(month)}</h3>
+        <div className="drive-grid">
+          {folders.map((f) => <button className="drive-folder" key={f.id} onClick={() => { setFolder(f.id); setSearch('') }}>
+            <span className="drive-icon">{f.icon}</span><strong>{f.name}</strong><span className="drive-muted">{f.hint}</span><span className="drive-muted">{count(month, f.id)} items</span>
+          </button>)}
+        </div>
+      </> : <>
+        <div className="drive-upload-bar" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); void upload(e.dataTransfer.files) }}>
+          <span className="drive-upload-icon" aria-hidden="true">↑</span><div className="drive-upload-copy"><strong>{monthLabel(month)} / {activeFolder?.name}</strong><p className="drive-muted">Drop files here, or choose files to upload.</p></div>
+          <button className="btn accent" disabled={busy} onClick={() => uploadInput.current?.click()}>{busy ? 'Uploading…' : '+ Upload files'}</button>
+          <input ref={uploadInput} aria-label="Upload accounting files" type="file" multiple disabled={busy} style={{ display: 'none' }} onChange={(e) => { void upload(e.target.files); e.target.value = '' }} />
 
-      <div className="stat-grid">
-        <div className="stat-card">
-          <div className="label">Income Invoices</div>
-          <div className="value positive">{fmt(totalIncome)}</div>
-          <div className="sub">{fmt(paidIncome)} paid · {fmt(unpaidIncome)} open</div>
         </div>
-        <div className="stat-card">
-          <div className="label">Expense Invoices</div>
-          <div className="value negative">{fmt(totalExpenses)}</div>
-        </div>
-        <div className="stat-card">
-          <div className="label">Net (income − expenses)</div>
-          <div className={`value ${totalIncome - totalExpenses >= 0 ? 'positive' : 'negative'}`}>
-            {fmt(totalIncome - totalExpenses)}
-          </div>
-        </div>
-        <div className="stat-card">
-          <div className="label">Outstanding</div>
-          <div className={`value ${outstanding >= 0 ? 'positive' : 'negative'}`}>
-            {fmt(outstanding)}
-          </div>
-          <div className="sub">unpaid + overdue{overdueCount > 0 ? ` · ${overdueCount} overdue` : ''}</div>
-        </div>
-      </div>
-
-      <div className="panel panel-assets">
-        <div className="panel-header">
-          <h2>Income Invoices</h2>
-          <p>Money owed to the business by clients.</p>
-          <button className="btn secondary small" onClick={() => addInvoice('income')}>
-            + Add Income Invoice
-          </button>
-        </div>
-        <InvoiceTable
-          invoices={incomeInvoices}
-          partyLabel="Client"
-          currency={curr}
-          onUpdate={updateInvoice}
-          onRemove={removeInvoice}
-        />
-      </div>
-
-      <div className="panel panel-liabilities">
-        <div className="panel-header">
-          <h2>Expense Invoices</h2>
-          <p>Money the business owes to vendors/suppliers.</p>
-          <button className="btn secondary small" onClick={() => addInvoice('expense')}>
-            + Add Expense Invoice
-          </button>
-        </div>
-        <InvoiceTable
-          invoices={expenseInvoices}
-          partyLabel="Vendor"
-          currency={curr}
-          onUpdate={updateInvoice}
-          onRemove={removeInvoice}
-        />
-      </div>
-
-      {monthlySummary.length > 0 && (
+        {error && <p role="alert" style={{ color: 'var(--red)' }}>{error}</p>}
         <div className="panel">
-          <div className="panel-header">
-            <h2>Monthly Summary</h2>
-            <p>Invoice totals per month — your month-by-month accounting overview. Click a month to filter.</p>
-          </div>
-          <div className="scroll-x">
-            <table>
-              <thead>
-                <tr>
-                  <th>Month</th>
-                  <th style={{ textAlign: 'right' }}>Invoices</th>
-                  <th style={{ textAlign: 'right' }}>Income</th>
-                  <th style={{ textAlign: 'right' }}>Expenses</th>
-                  <th style={{ textAlign: 'right' }}>Net</th>
-                  <th style={{ textAlign: 'right' }}>Outstanding</th>
-                </tr>
-              </thead>
-              <tbody>
-                {monthlySummary.map((r) => (
-                  <tr
-                    key={r.m}
-                    onClick={() => setSelectedMonth(selectedMonth === r.m ? 'all' : r.m)}
-                    style={{ cursor: 'pointer', background: selectedMonth === r.m ? 'var(--accent-soft)' : undefined }}
-                  >
-                    <td style={{ fontWeight: selectedMonth === r.m ? 700 : 500 }}>{monthLabel(r.m)}</td>
-                    <td className="amount">{r.count}</td>
-                    <td className="amount positive">{formatCurrency(r.inc, ws.currency)}</td>
-                    <td className="amount negative">{formatCurrency(r.exp, ws.currency)}</td>
-                    <td className={`amount ${r.net >= 0 ? 'positive' : 'negative'}`} style={{ fontWeight: 700 }}>{formatCurrency(r.net, ws.currency)}</td>
-                    <td className={`amount ${r.open >= 0 ? 'positive' : 'negative'}`}>{formatCurrency(r.open, ws.currency)}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td><strong>Total</strong></td>
-                  <td className="amount"><strong>{allInvoices.length}</strong></td>
-                  <td className="amount positive"><strong>{formatCurrency(monthlySummary.reduce((s, r) => s + r.inc, 0), ws.currency)}</strong></td>
-                  <td className="amount negative"><strong>{formatCurrency(monthlySummary.reduce((s, r) => s + r.exp, 0), ws.currency)}</strong></td>
-                  <td className="amount"><strong>{formatCurrency(monthlySummary.reduce((s, r) => s + r.net, 0), ws.currency)}</strong></td>
-                  <td className="amount"><strong>{formatCurrency(monthlySummary.reduce((s, r) => s + r.open, 0), ws.currency)}</strong></td>
-                </tr>
-              </tfoot>
-            </table>
+          <div className="drive-list-toolbar"><div className="view-switch" aria-label="Invoice file view"><button className={fileView === 'cards' ? 'active' : ''} aria-pressed={fileView === 'cards'} onClick={() => setFileView('cards')}>Cards</button><button className={fileView === 'list' ? 'active' : ''} aria-pressed={fileView === 'list'} onClick={() => setFileView('list')}>List</button></div><div><h3>Files <span className="drive-count">{files.length + folderInvoices.length}</span></h3><p className="drive-muted">{activeFolder?.name} · {monthLabel(month)}</p></div><input type="search" aria-label="Search uploaded files" placeholder="Search uploaded files…" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
+          {!files.length && !folderInvoices.length && <div className="empty-state">This folder is ready for your {monthLabel(month)} files.</div>}
+          {search && !visibleFiles.length && <p className="empty-state">No uploaded files match “{search}”.</p>}
+          <div className={`drive-files ${fileView === 'cards' ? 'invoice-file-cards' : ''}`}>
+            {visibleFiles.map((file) => <div className="drive-file" key={file.id}>
+              <span>📄</span><div className="drive-file-name"><button className="btn ghost small" onClick={() => openDataUrl(file.data)}>{file.name}</button><div className="drive-muted">{Math.max(1, Math.round(file.size / 1024))} KB · Uploaded {new Date(file.uploadedAt).toLocaleDateString()}</div></div>
+              <button className="btn ghost small" onClick={() => downloadDataUrl(file.data, file.name)}>Download</button>
+              <button className="btn ghost small danger" aria-label={`Delete ${file.name}`} onClick={() => { if (confirm(`Delete ${file.name}?`)) setData((prev) => updateActiveWorkspace(prev, (w) => ({ ...w, accountingDocuments: (w.accountingDocuments ?? []).filter((d) => d.id !== file.id) }))) }}>✕</button>
+            </div>)}
+            {folderInvoices.map((invoice) => <div className="drive-file" key={invoice.id}>
+              <span>🧾</span><div className="drive-file-name"><strong>{invoice.fileName || invoice.number || invoice.party}</strong><div className="drive-muted">{invoice.party} · {invoice.date} · {formatCurrency(invoice.amount, ws.currency)} · {invoice.status}</div></div>
+              {invoice.fileData && <><button className="btn ghost small" onClick={() => openDataUrl(invoice.fileData!)}>Open</button><button className="btn ghost small" onClick={() => downloadDataUrl(invoice.fileData!, invoice.fileName || 'invoice.pdf')}>Download</button></>}
+            </div>)}
           </div>
         </div>
-      )}
+        <p className="drive-muted drive-storage-note">File storage only · Use Import Statement to add bank transactions.</p>
+        {(folder === 'sales' || folder === 'b2b' || folderInvoices.length > 0) && <details className="panel"><summary style={{ cursor: 'pointer', fontWeight: 600 }}>Invoice details & payment tracking</summary>
+          <p className="drive-muted">Manage amounts, due dates and payment status for this month.</p>
+          <button className="btn secondary small" onClick={() => {
+            const type = folder === 'sales' ? 'income' : 'expense'
+            setData((prev) => updateActiveWorkspace(prev, (w) => ({ ...w, invoices: [...(w.invoices ?? []), { id: uuid(), type, accountingFolder: folder, number: nextInvoiceNumber(w.invoices ?? [], type), party: '', description: '', amount: 0, date: `${month}-01`, status: 'unpaid' }] })))
+          }}>+ Add invoice record</button>
+          <InvoiceTable invoices={folderInvoices} partyLabel={folder === 'sales' ? 'Client' : 'Vendor'} currency={ws.currency} onUpdate={updateInvoice} onRemove={removeInvoice} />
+        </details>}
+      </>}
     </div>
   )
 }

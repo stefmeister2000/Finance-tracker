@@ -3,7 +3,7 @@ import type { AppData, EntryType, Transaction, WorkspaceData } from '../types'
 import { emptyMonth } from '../storage'
 import { formatCurrency } from '../utils'
 import { guessCategoryId, guessEntryType } from '../categorize'
-import { parseStatementPdf, type ParsedTransaction } from '../pdfImport'
+import { readStatementPdf, type ParsedStatement, type ParsedTransaction } from '../pdfImport'
 
 interface Props {
   ws: WorkspaceData
@@ -35,6 +35,7 @@ function existingSignatures(ws: WorkspaceData, cardId: string): Set<string> {
 }
 
 export default function StatementImportModal({ ws, setData, onClose }: Props) {
+  const [statement, setStatement] = useState<ParsedStatement | null>(null)
   const [rows, setRows] = useState<Row[] | null>(null)
   const [cardId, setCardId] = useState(ws.cards[0]?.id ?? '')
   const [loading, setLoading] = useState(false)
@@ -45,17 +46,26 @@ export default function StatementImportModal({ ws, setData, onClose }: Props) {
     if (!file) return
     setLoading(true)
     setError(null)
+    setStatement(null)
     try {
-      const parsed = await parseStatementPdf(file)
+      const result = await readStatementPdf(file)
+      setStatement(result)
+      const parsed = result.transactions
       if (parsed.length === 0) {
         setError('No transactions could be found in this PDF. It may be a scanned/image-based statement.')
         setRows(null)
       } else {
-        const existing = existingSignatures(ws, cardId)
+        // Never default a detected KBC statement to an unrelated account.
+        const matchingAccounts = ws.cards.filter((c) => /\bkbc\b/i.test(c.name))
+        const targetCardId = result.bank === 'KBC'
+          ? (matchingAccounts.length === 1 ? matchingAccounts[0].id : '')
+          : cardId
+        setCardId(targetCardId)
+        const existing = existingSignatures(ws, targetCardId)
         setRows(
           parsed.map((p) => {
-            const duplicate = existing.has(transactionSignature({ ...p, cardId }))
             const type = guessEntryType(p.description, p.type, ws.typeRules)
+            const duplicate = existing.has(transactionSignature({ ...p, type, cardId: targetCardId }))
             return {
               ...p,
               type,
@@ -67,7 +77,7 @@ export default function StatementImportModal({ ws, setData, onClose }: Props) {
         )
       }
     } catch (err) {
-      setError('Failed to read this PDF. Make sure it is a valid statement file.')
+      setError(err instanceof Error ? err.message : 'Failed to read this PDF. Make sure it is a valid statement file.')
       setRows(null)
     } finally {
       setLoading(false)
@@ -132,7 +142,7 @@ export default function StatementImportModal({ ws, setData, onClose }: Props) {
       <div className="modal wide" onClick={(e) => e.stopPropagation()}>
         <h2>Import Statement (PDF)</h2>
         <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: -8 }}>
-          Upload a Revolut (or similar) PDF statement. We'll automatically detect transactions, guess categories, and
+          Upload a KBC Touch or Revolut PDF statement. We'll automatically detect transactions, guess categories, and
           add them to the right months.
         </p>
 
@@ -148,16 +158,35 @@ export default function StatementImportModal({ ws, setData, onClose }: Props) {
 
         {rows && (
           <>
+            {statement && (
+              <div className="panel" style={{ marginBottom: 14 }}>
+                <strong>{statement.bank} statement totals</strong>
+                <p style={{ fontSize: 13 }}>
+                  {statement.transactions.length} transactions · Money in: {formatCurrency(statement.transactions.filter((t) => t.type === 'income').reduce((s, t) => s + Math.round(t.amount * 100), 0) / 100, ws.currency)}
+                  {' · '}Money out: {formatCurrency(statement.transactions.filter((t) => t.type === 'expense').reduce((s, t) => s + Math.round(t.amount * 100), 0) / 100, ws.currency)}
+                </p>
+                {statement.warning && <p role="status" style={{ fontSize: 13 }}>{statement.warning}</p>}
+                <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Full PDF totals before duplicate exclusions and your transaction rules. Selected totals below reflect what will be imported.</p>
+              </div>
+            )}
             <div className="form-grid" style={{ marginBottom: 14 }}>
               <div className="field">
                 <label>Assign all transactions to account</label>
                 <select value={cardId} onChange={(e) => changeCard(e.target.value)}>
+                  <option value="" disabled>Select an account</option>
                   {ws.cards.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
                     </option>
                   ))}
                 </select>
+                {statement?.bank === 'KBC' && (
+                  <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                    {cardId && /\bkbc\b/i.test(ws.cards.find((c) => c.id === cardId)?.name ?? '')
+                      ? 'KBC statement matched to your KBC account.'
+                      : 'Choose the KBC account for this statement. If it is missing, add it in Settings first.'}
+                  </p>
+                )}
               </div>
               <div className="field">
                 <label>Found</label>

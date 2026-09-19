@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { costVatBreakdown, costVatTotals } from '../productCosts'
 import { v4 as uuid } from 'uuid'
 import type { AppData, Product, ProductCostItem, VolumeExample, WorkspaceData } from '../types'
 import { updateActiveWorkspace } from '../storage'
@@ -133,16 +134,16 @@ export default function BusinessToolsPage({ data, ws, setData }: Props) {
   const selectedProduct = products.find((p) => p.id === selectedProductId) ?? null
 
   return (
-    <div>
+    <div className="clear-page tools-page">
       <div className="page-header">
         <h2 style={{ margin: 0 }}>Business Tools</h2>
         <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>Calculators for tax, margins, and break-even · {displayCurr === 'EUR' ? 'Prices in EUR' : `1 EUR = ${DISPLAY_RATES[displayCurr as DisplayCurrency] ?? '?'} ${displayCurr}`}</p>
       </div>
 
       <div className="tabs">
-        <button className={tab === 'vat' ? 'active' : ''} onClick={() => setTab('vat')}>🧾 VAT Calculator</button>
-        <button className={tab === 'margin' ? 'active' : ''} onClick={() => setTab('margin')}>📊 Profit Margin</button>
-        <button className={tab === 'volume' ? 'active' : ''} onClick={() => setTab('volume')}>🎯 Economics</button>
+        <button className={tab === 'vat' ? 'active' : ''} onClick={() => setTab('vat')}>VAT calculator<small>Add or remove VAT from a price</small></button>
+        <button className={tab === 'margin' ? 'active' : ''} onClick={() => setTab('margin')}>Product margins<small>Prices, costs and profit per sale</small></button>
+        <button className={tab === 'volume' ? 'active' : ''} onClick={() => setTab('volume')}>Break-even planner<small>Sales needed to cover monthly costs</small></button>
       </div>
 
       {tab === 'vat' && <VatCalculator ws={ws} setData={setData} />}
@@ -457,7 +458,7 @@ function MarginCalculator({ ws, setData, products, selectedProductId, displayAmt
 
     for (const p of list) {
       const costItems = p.costItems ?? migrateCostItems(p)
-      const m = productMargins({ ...p, costItems })
+      const m = productMargins({ ...p, costItems }, vatRate)
       lines.push(`## ${p.name}${p.highlighted ? ' ★' : ''}`)
       lines.push(`- Category: ${p.category || 'Other'}`)
       lines.push(`- Selling price: ${formatCurrency(p.sellingPrice, ws.currency)}/month${p.vatIncluded ? ' (incl. VAT)' : ' (excl. VAT)'}`)
@@ -465,7 +466,8 @@ function MarginCalculator({ ws, setData, products, selectedProductId, displayAmt
       if (costItems.length > 0) {
         lines.push('- Cost breakdown:')
         for (const item of costItems) {
-          lines.push(`  - ${item.label}: ${formatCurrency(item.amount, ws.currency)}`)
+          const amounts = costVatBreakdown(item)
+          lines.push(`  - ${item.label}: ${formatCurrency(amounts.net, ws.currency)} before VAT; VAT ${amounts.vat === null ? 'not set' : formatCurrency(amounts.vat, ws.currency)}; including VAT ${amounts.gross === null ? 'not set' : formatCurrency(amounts.gross, ws.currency)}`)
         }
       }
       lines.push(`- Total costs: ${formatCurrency(m.cost, ws.currency)}`)
@@ -665,7 +667,7 @@ function MarginCalculator({ ws, setData, products, selectedProductId, displayAmt
         <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 12 }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', marginBottom: 6 }}>
-              Selling Price / month
+              Selling price per sale
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-muted)' }}>{ws.currency}</span>
@@ -680,7 +682,7 @@ function MarginCalculator({ ws, setData, products, selectedProductId, displayAmt
               />
               <label style={{ fontSize: 12, color: 'var(--text-muted)', cursor: 'pointer', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 }}>
                 <input type="checkbox" checked={p.vatIncluded} onChange={(e) => onUpdate(p.id, { vatIncluded: e.target.checked })} />
-                inc. VAT
+                Price includes VAT
               </label>
             </div>
             {displayCurr !== ws.currency && p.sellingPrice > 0 && (
@@ -689,9 +691,9 @@ function MarginCalculator({ ws, setData, products, selectedProductId, displayAmt
               </div>
             )}
             {/* VAT country breakdown */}
-            {p.sellingPrice > 0 && (ws.vatCountries ?? []).length > 0 && (
+            {p.sellingPrice > 0 && (
               <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {(ws.vatCountries ?? []).map((c, i) => {
+                {((ws.vatCountries ?? []).length ? ws.vatCountries! : [{ name: 'Active rate', rate: vatRate }]).map((c, i) => {
                   const pct = +(c.rate * 100).toFixed(4)
                   const exVat = p.vatIncluded ? p.sellingPrice / (1 + c.rate) : p.sellingPrice
                   const total = p.vatIncluded ? p.sellingPrice : p.sellingPrice * (1 + c.rate)
@@ -699,17 +701,9 @@ function MarginCalculator({ ws, setData, products, selectedProductId, displayAmt
                   return (
                     <div key={i} style={{ fontSize: 11, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px', display: 'flex', flexDirection: 'column', gap: 1 }}>
                       <span style={{ fontWeight: 700, color: 'var(--text-muted)' }}>{c.name} · {pct}% VAT</span>
-                      {p.vatIncluded ? (
-                        <>
-                          <span>Ex-VAT: <strong>{formatCurrency(displayAmt(exVat), displayCurr)}</strong></span>
-                          <span style={{ color: 'var(--red)' }}>VAT: −{formatCurrency(displayAmt(vatAmt), displayCurr)}</span>
-                        </>
-                      ) : (
-                        <>
-                          <span style={{ color: 'var(--text-muted)' }}>+ VAT: {formatCurrency(displayAmt(vatAmt), displayCurr)}</span>
-                          <span>Customer pays: <strong>{formatCurrency(displayAmt(total), displayCurr)}</strong></span>
-                        </>
-                      )}
+                      <span>Before VAT: <strong>{formatCurrency(displayAmt(exVat), displayCurr)}</strong></span>
+                      <span>Customer VAT: <strong>{formatCurrency(displayAmt(vatAmt), displayCurr)}</strong></span>
+                      <span>Customer pays: <strong>{formatCurrency(displayAmt(total), displayCurr)}</strong></span>
                     </div>
                   )
                 })}
@@ -718,55 +712,64 @@ function MarginCalculator({ ws, setData, products, selectedProductId, displayAmt
           </div>
           {p.sellingPrice > 0 && (
             <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Net (ex-VAT)</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Before VAT · {+(vatRate * 100).toFixed(2)}% active rate</div>
               <div style={{ fontWeight: 700 }}>{formatCurrency(displayAmt(m.net), displayCurr)}</div>
             </div>
           )}
         </div>
 
-        {/* Cost items */}
-        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
-          <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', marginBottom: 10 }}>
-            Cost Breakdown
+        {/* Supplier costs and VAT are separate from VAT charged to customers. */}
+        <section className="product-cost-section" aria-label="Business cost breakdown">
+          <div className="product-cost-heading">
+            <h3>Business costs per sale</h3>
+            <p>What you pay to make and deliver one sale. COGS means the cost of the product itself.</p>
           </div>
-          {costItems.length === 0 && (
-            <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 8 }}>No costs added yet.</div>
-          )}
-          {(() => {
-            const costSuggestions = Array.from(new Set(
-              products.flatMap((x) => (x.costItems ?? []).map((c) => c.label)).filter(Boolean),
-            ))
-            return costItems.map((item) => (
-            <div key={item.id} style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
-              <DraftCombo
-                value={item.label}
-                suggestions={costSuggestions}
-                onChange={(v) => onUpdateCost(p.id, item.id, { label: v })}
-                style={{ flex: 1, minWidth: 0 }}
-                placeholder="Cost label"
-              />
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '0 10px', height: 36 }}>
-                <span style={{ fontSize: 13, color: 'var(--text-muted)', fontWeight: 600 }}>{ws.currency}</span>
-                <input
-                  type="number"
-                  min={0}
-                  step={0.01}
-                  placeholder="0.00"
-                  value={item.amount || ''}
-                  onChange={(e) => onUpdateCost(p.id, item.id, { amount: parseFloat(e.target.value) || 0 })}
-                  style={{ width: 80, border: 'none', background: 'transparent', fontSize: 14, fontWeight: 600, outline: 'none', padding: 0 }}
-                />
+          {costItems.length === 0 && <p className="product-cost-note">No costs yet. Add product, packaging or delivery costs below.</p>}
+          {costItems.map((item) => {
+            const amounts = costVatBreakdown(item)
+            const money = (value: number) => formatCurrency(displayAmt(value), displayCurr)
+            return (
+              <div key={item.id} className="product-cost-item">
+                <div className="product-cost-name">
+                  <DraftCombo
+                    value={item.label}
+                    suggestions={Array.from(new Set(['COGS', 'Packaging', 'Delivery', 'Payment processing', ...products.flatMap((x) => (x.costItems ?? []).map((c) => c.label))]))}
+                    onChange={(v) => onUpdateCost(p.id, item.id, { label: v })}
+                    style={{ flex: 1, minWidth: 0 }}
+                    placeholder="Cost name"
+                  />
+                  <button className="btn ghost small" aria-label={`Remove ${item.label} cost`} onClick={() => onRemoveCost(p.id, item.id)}>✕</button>
+                </div>
+                <div className="product-cost-inputs">
+                  <label>Cost before VAT ({ws.currency})
+                    <input type="number" min={0} step={0.01} placeholder="0.00" value={item.amount || ''}
+                      onChange={(e) => onUpdateCost(p.id, item.id, { amount: Math.max(0, parseFloat(e.target.value) || 0) })} />
+                  </label>
+                  <label>Supplier VAT rate (%)
+                    <input type="number" min={0} max={100} step={0.01} placeholder="Not set" value={item.vatRate === undefined ? '' : +(item.vatRate * 100).toFixed(4)}
+                      onChange={(e) => onUpdateCost(p.id, item.id, { vatRate: e.target.value === '' ? undefined : Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)) / 100 })} />
+                  </label>
+                </div>
+                <dl className="product-cost-amounts">
+                  <div><dt>Before VAT</dt><dd>{money(amounts.net)}</dd></div>
+                  <div><dt>VAT amount</dt><dd>{amounts.vat === null ? 'Not set' : money(amounts.vat)}</dd></div>
+                  <div><dt>You pay incl. VAT</dt><dd>{amounts.gross === null ? 'Set VAT rate' : money(amounts.gross)}</dd></div>
+                </dl>
               </div>
-              {displayCurr !== ws.currency && item.amount > 0 && (
-                <span style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>≈ {displayAmt(item.amount).toFixed(0)} {displayCurr}</span>
-              )}
-              <button className="btn ghost small" onClick={() => onRemoveCost(p.id, item.id)} style={{ flexShrink: 0 }}>✕</button>
+            )
+          })}
+          <button className="btn ghost small" onClick={() => onAddCost(p.id)}>+ Add business cost</button>
+          {costItems.length > 0 && (() => {
+            const totals = costVatTotals(costItems)
+            const money = (value: number) => formatCurrency(displayAmt(value), displayCurr)
+            return <div className="product-cost-totals">
+              <div><span>Total before VAT</span><strong>{money(totals.net)}</strong></div>
+              <div><span>Total supplier VAT</span><strong>{totals.vat === null ? 'Incomplete' : money(totals.vat)}</strong></div>
+              <div className="product-cost-payable"><span>Total paid incl. VAT</span><strong>{totals.gross === null ? 'Set missing VAT rates' : money(totals.gross)}</strong></div>
+              <p className="product-cost-note">{totals.vat === null ? 'Enter a VAT rate for every cost, including 0% where applicable. ' : ''}Margins use costs before VAT and assume supplier VAT is recoverable. Supplier VAT rates are separate from customer VAT rates.</p>
             </div>
-          ))})()}
-          <button className="btn ghost small" onClick={() => onAddCost(p.id)} style={{ marginTop: 2 }}>
-            + Add cost
-          </button>
-        </div>
+          })()}
+        </section>
 
         {/* Extra charges (revenue items like shipping) */}
         <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', background: '#22c55e08' }}>
@@ -829,11 +832,11 @@ function MarginCalculator({ ws, setData, products, selectedProductId, displayAmt
               </div>
             )}
             <div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Total costs</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Costs before VAT</div>
               <div style={{ fontWeight: 700, color: 'var(--red)' }}>{formatCurrency(displayAmt(m.cost), displayCurr)}</div>
             </div>
             <div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Net profit</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Profit before overheads</div>
               <div style={{ fontWeight: 700, color: m.profit >= 0 ? 'var(--green)' : 'var(--red)' }}>
                 {formatCurrency(displayAmt(m.profit), displayCurr)}
               </div>
@@ -1408,7 +1411,7 @@ function VolumeCalculator({ ws, setData, products, selectedProduct, displayAmt, 
     <div>
       <div className="panel">
         <div className="panel-header">
-          <h2>Volume &amp; Break-even Calculator</h2>
+          <h2>Monthly sales target</h2>
           <p>Select up to two products to compare side by side, set your fixed costs, ad spend and profit target, and see exactly how many subscriptions you need to sell.</p>
         </div>
 
@@ -1496,7 +1499,7 @@ function VolumeCalculator({ ws, setData, products, selectedProduct, displayAmt, 
           </div>
         ) : (
           <div style={{ marginTop: 16, padding: 14, background: 'var(--bg-elevated)', borderRadius: 8, fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}>
-            Select a product above to see break-even analysis. Click a second product to compare them underneath.
+            Start by selecting a product above. Your required sales volume will appear here. Select a second product to compare.
           </div>
         )}
       </div>
@@ -1504,7 +1507,7 @@ function VolumeCalculator({ ws, setData, products, selectedProduct, displayAmt, 
       {/* ── Saved Examples ──────────────────────────────────────────────── */}
       <div className="panel">
         <div className="panel-header">
-          <h2>💡 Saved Examples</h2>
+          <h2>Saved scenarios</h2>
           <p>Scenarios you've saved from the calculator above, for revisiting ideas later.</p>
         </div>
         {(ws.volumeExamples ?? []).length === 0 ? (

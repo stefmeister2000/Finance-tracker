@@ -13,7 +13,7 @@ import {
   Legend,
 } from 'recharts'
 import { v4 as uuid } from 'uuid'
-import type { AppData, FreelanceClient, WorkspaceData } from '../types'
+import type { AppData, FreelanceClient, Receivable, WorkspaceData } from '../types'
 import type { View } from '../App'
 import { currentMonthId, loadData, monthLabel, sortedMonthIds, updateActiveWorkspace } from '../storage'
 import {
@@ -39,6 +39,16 @@ interface Props {
 
 export default function OverviewPage({ data, ws, setData, setView, onAddMonth }: Props) {
   const { fmt, curr } = useCurrency()
+  const [customizeOverview, setCustomizeOverview] = useState(false)
+  const hiddenOverview = new Set(ws.hiddenOverviewSections ?? [])
+  const overviewSections = [{"id":"stat-total-ad-spend","title":"Total Ad Spend","personal":false,"business":true},{"id":"stat-revenue-attributed","title":"Revenue Attributed","personal":false,"business":true},{"id":"stat-total-invested","title":"Total Invested","personal":false,"business":true},{"id":"ad-chart","title":"Ad Spend vs Revenue","personal":false,"business":true},{"id":"stat-net-worth","title":"Net Worth","personal":true,"business":false},{"id":"stat-net-worth-change","title":"Net Worth Change","personal":true,"business":false},{"id":"stat-total-income","title":"Total Income","personal":false,"business":false},{"id":"stat-savings-profit-loss","title":"Savings / Profit & Loss","personal":false,"business":false},{"id":"stat-owed-to-you","title":"Owed to You","personal":false,"business":false},{"id":"net-worth-history","title":"Net Worth Over Time","personal":true,"business":false},{"id":"income-expenses","title":"Income vs Expenses","personal":false,"business":false},{"id":"monthly-result","title":"Monthly result","personal":false,"business":false},{"id":"receivables","title":"Owed to You"},{"id":"debts","title":"You Owe (Debts)"},{"id":"freelance","title":"Freelance Clients","personal":true,"business":false},{"id":"breakdown","title":"Spending Breakdown","personal":false,"business":false},{"id":"profit-loss","title":"Profit & Loss by Month","personal":false,"business":false}].filter(section => !('personal' in section && section.personal) || ws.kind === 'personal').filter(section => !('business' in section && section.business) || ws.kind === 'business')
+  function toggleOverview(id: string) {
+    setData(prev => updateActiveWorkspace(prev, w => {
+      const hidden = new Set(w.hiddenOverviewSections ?? [])
+      hidden.has(id) ? hidden.delete(id) : hidden.add(id)
+      return { ...w, hiddenOverviewSections: [...hidden] }
+    }))
+  }
   const [addOpen, setAddOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [showStripeSetup, setShowStripeSetup] = useState(false)
@@ -91,30 +101,38 @@ export default function OverviewPage({ data, ws, setData, setView, onAddMonth }:
     return map
   }, [ws.adSpendEntries])
 
+  // The month the dashboard calculation and new items attach to (current month, else latest with data).
+  const monthResultId = ids.includes(currentMonthId()) ? currentMonthId() : (ids.length ? ids[ids.length - 1] : currentMonthId())
+  const monthTx = ws.months[monthResultId]?.transactions ?? []
+  const monthIncome = monthTx.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0)
+  const monthExpense = monthTx.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0)
+  const monthNet = monthIncome - monthExpense
+
   const outstandingReceivables = (ws.receivables ?? [])
     .filter((r) => !r.paid)
     .sort((a, b) => (a.expectedDate ?? '').localeCompare(b.expectedDate ?? ''))
   const totalOwed = outstandingReceivables.reduce((s, r) => s + r.amount, 0)
 
-  function markReceivablePaid(id: string) {
-    setData((prev) =>
-      updateActiveWorkspace(prev, (w) => ({
-        ...w,
-        receivables: (w.receivables ?? []).map((r) =>
-          r.id === id ? { ...r, paid: true, paidDate: r.paidDate || new Date().toISOString().slice(0, 10) } : r,
-        ),
-      })),
-    )
-  }
+  const outstandingDebts = (ws.debts ?? [])
+    .filter((r) => !r.paid)
+    .sort((a, b) => (a.expectedDate ?? '').localeCompare(b.expectedDate ?? ''))
+  const totalDebt = outstandingDebts.reduce((s, r) => s + r.amount, 0)
 
-  function removeReceivable(id: string) {
-    setData((prev) =>
-      updateActiveWorkspace(prev, (w) => ({
-        ...w,
-        receivables: (w.receivables ?? []).filter((r) => r.id !== id),
-      })),
-    )
+  // Projected end-of-month position: this month's net cash, plus what's still owed to you, minus what you still owe.
+  const projectedPosition = monthNet + totalOwed - totalDebt
+
+  function updateList(key: 'receivables' | 'debts', id: string, updates: Partial<Receivable>) {
+    setData((prev) => updateActiveWorkspace(prev, (w) => ({ ...w, [key]: (w[key] ?? []).map((r) => (r.id === id ? { ...r, ...updates } : r)) })))
   }
+  function addToList(key: 'receivables' | 'debts', person: string) {
+    const r: Receivable = { id: uuid(), person, description: '', amount: 0, monthId: monthResultId, expectedDate: '', paid: false }
+    setData((prev) => updateActiveWorkspace(prev, (w) => ({ ...w, [key]: [...(w[key] ?? []), r] })))
+  }
+  function removeFromList(key: 'receivables' | 'debts', id: string) {
+    setData((prev) => updateActiveWorkspace(prev, (w) => ({ ...w, [key]: (w[key] ?? []).filter((r) => r.id !== id) })))
+  }
+  const markReceivablePaid = (id: string) => updateList('receivables', id, { paid: true, paidDate: new Date().toISOString().slice(0, 10) })
+  const removeReceivable = (id: string) => removeFromList('receivables', id)
 
   const freelanceClients = ws.freelanceClients ?? []
   const freelanceOutstanding = freelanceClients.filter((c) => !c.paid).reduce((s, c) => s + c.amount, 0)
@@ -211,10 +229,11 @@ export default function OverviewPage({ data, ws, setData, setView, onAddMonth }:
   }
 
   return (
-    <div>
+    <div className="overview-page">
       <div className="page-header">
         <h2 style={{ margin: 0 }}>Overview</h2>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button className="btn secondary small" aria-expanded={customizeOverview} onClick={() => setCustomizeOverview(!customizeOverview)}>Customize overview{hiddenOverview.size > 0 ? ' (' + hiddenOverview.size + ' hidden)' : ''}</button>
           {/* Search */}
           <input
             type="text"
@@ -251,6 +270,7 @@ export default function OverviewPage({ data, ws, setData, setView, onAddMonth }:
         </div>
       </div>
 
+      {customizeOverview && <div className="panel overview-customize"><div className="panel-header"><h2>Show on overview</h2><p>Choose what you want to see. Your data and totals stay unchanged.</p><button className="btn ghost small" onClick={() => setData(prev => updateActiveWorkspace(prev, w => ({ ...w, hiddenOverviewSections: [] })))}>Show all</button></div><div className="overview-options">{overviewSections.map(section => <label key={section.id}><input type="checkbox" checked={!hiddenOverview.has(section.id)} onChange={() => toggleOverview(section.id)}/>{section.title}{section.id.startsWith('stat-') ? ' · summary card' : ''}</label>)}</div></div>}
       {/* Stripe setup panel */}
       {showStripeSetup && (
         <div className="panel" style={{ marginBottom: 12 }}>
@@ -342,20 +362,20 @@ export default function OverviewPage({ data, ws, setData, setView, onAddMonth }:
       {isBusiness && ((adTotals && adTotals.spend > 0) || totalStartupInvested > 0) && (
         <div className="stat-grid">
           {adTotals && adTotals.spend > 0 && (
-            <div className="stat-card">
+            <div className="stat-card" hidden={hiddenOverview.has('stat-total-ad-spend')} data-overview-section="stat-total-ad-spend"><button className="overview-hide" aria-label="Hide Total Ad Spend" title="Hide Total Ad Spend" onClick={() => toggleOverview('stat-total-ad-spend')}>Hide</button>
               <div className="label">Total Ad Spend</div>
               <div className="value negative">{fmt(adTotals.spend)}</div>
               <div className="sub">{adTotals.roas !== null ? `${adTotals.roas.toFixed(2)}x ROAS` : 'no revenue tracked yet'}</div>
             </div>
           )}
           {adTotals && adTotals.revenue > 0 && (
-            <div className="stat-card">
+            <div className="stat-card" hidden={hiddenOverview.has('stat-revenue-attributed')} data-overview-section="stat-revenue-attributed"><button className="overview-hide" aria-label="Hide Revenue Attributed" title="Hide Revenue Attributed" onClick={() => toggleOverview('stat-revenue-attributed')}>Hide</button>
               <div className="label">Revenue Attributed</div>
               <div className="value positive">{fmt(adTotals.revenue)}</div>
             </div>
           )}
           {totalStartupInvested > 0 && (
-            <div className="stat-card">
+            <div className="stat-card" hidden={hiddenOverview.has('stat-total-invested')} data-overview-section="stat-total-invested"><button className="overview-hide" aria-label="Hide Total Invested" title="Hide Total Invested" onClick={() => toggleOverview('stat-total-invested')}>Hide</button>
               <div className="label">Total Invested</div>
               <div className="value negative">{fmt(totalStartupInvested)}</div>
               <div className="sub">
@@ -369,7 +389,7 @@ export default function OverviewPage({ data, ws, setData, setView, onAddMonth }:
       )}
 
       {isBusiness && adHistory.length > 0 && (
-        <div className="panel">
+        <div className="panel" hidden={hiddenOverview.has('ad-chart')} data-overview-section="ad-chart"><button className="overview-hide" aria-label="Hide Ad Spend vs Revenue" title="Hide Ad Spend vs Revenue" onClick={() => toggleOverview('ad-chart')}>Hide</button>
           <div className="panel-header">
             <h2>Ad Spend vs Revenue</h2>
             <button className="btn ghost small" onClick={() => setView({ type: 'adspend' })}>View Details →</button>
@@ -398,14 +418,14 @@ export default function OverviewPage({ data, ws, setData, setView, onAddMonth }:
         <>
           <div className="stat-grid">
             {!isBusiness && (
-              <div className="stat-card">
+              <div className="stat-card" hidden={hiddenOverview.has('stat-net-worth')} data-overview-section="stat-net-worth"><button className="overview-hide" aria-label="Hide Net Worth" title="Hide Net Worth" onClick={() => toggleOverview('stat-net-worth')}>Hide</button>
                 <div className="label">Net Worth</div>
                 <div className={`value ${latestNetWorth >= 0 ? 'positive' : 'negative'}`}>{fmt(latestNetWorth)}</div>
                 <div className="sub">as of {monthLabel(toMonth)}</div>
               </div>
             )}
             {!isBusiness && (
-              <div className="stat-card">
+              <div className="stat-card" hidden={hiddenOverview.has('stat-net-worth-change')} data-overview-section="stat-net-worth-change"><button className="overview-hide" aria-label="Hide Net Worth Change" title="Hide Net Worth Change" onClick={() => toggleOverview('stat-net-worth-change')}>Hide</button>
                 <div className="label">Net Worth Change</div>
                 <div className={`value ${totalChange >= 0 ? 'positive' : 'negative'}`}>
                   {totalChange >= 0 ? '+' : ''}{fmt(totalChange)}
@@ -413,19 +433,19 @@ export default function OverviewPage({ data, ws, setData, setView, onAddMonth }:
                 <div className="sub">since {monthLabel(fromMonth)}</div>
               </div>
             )}
-            <div className="stat-card">
+            <div className="stat-card" hidden={hiddenOverview.has('stat-total-income')} data-overview-section="stat-total-income"><button className="overview-hide" aria-label="Hide Total Income" title="Hide Total Income" onClick={() => toggleOverview('stat-total-income')}>Hide</button>
               <div className="label">Total Income</div>
               <div className="value positive">{fmt(totalIncome)}</div>
               <div className="sub">across {filteredIds.length} month(s)</div>
             </div>
-            <div className="stat-card">
+            <div className="stat-card" hidden={hiddenOverview.has('stat-savings-profit-loss')} data-overview-section="stat-savings-profit-loss"><button className="overview-hide" aria-label="Hide Savings / Profit & Loss" title="Hide Savings / Profit & Loss" onClick={() => toggleOverview('stat-savings-profit-loss')}>Hide</button>
               <div className="label">{pnlLabel}</div>
               <div className={`value ${totalIncome - totalExpense >= 0 ? 'positive' : 'negative'}`}>
                 {fmt(totalIncome - totalExpense)}
               </div>
               <div className="sub">{avgRate.toFixed(1)}% margin · {fmt(totalExpense)} spent</div>
             </div>
-            <div className="stat-card">
+            <div className="stat-card" hidden={hiddenOverview.has('stat-owed-to-you')} data-overview-section="stat-owed-to-you"><button className="overview-hide" aria-label="Hide Owed to You" title="Hide Owed to You" onClick={() => toggleOverview('stat-owed-to-you')}>Hide</button>
               <div className="label">Owed to You</div>
               <div className={`value ${totalOwed > 0 ? 'positive' : ''}`}>{fmt(totalOwed)}</div>
               <div className="sub">{outstandingReceivables.length === 0 ? 'Nothing outstanding' : `${outstandingReceivables.length} outstanding`}</div>
@@ -433,7 +453,7 @@ export default function OverviewPage({ data, ws, setData, setView, onAddMonth }:
           </div>
 
           {!isBusiness && (
-            <div className="panel">
+            <div className="panel" hidden={hiddenOverview.has('net-worth-history')} data-overview-section="net-worth-history"><button className="overview-hide" aria-label="Hide Net Worth Over Time" title="Hide Net Worth Over Time" onClick={() => toggleOverview('net-worth-history')}>Hide</button>
               <div className="panel-header"><h2>Net Worth Over Time</h2></div>
               <div style={{ width: '100%', height: 280 }}>
                 <ResponsiveContainer>
@@ -449,7 +469,7 @@ export default function OverviewPage({ data, ws, setData, setView, onAddMonth }:
             </div>
           )}
 
-          <div className="panel">
+          <div className="panel" hidden={hiddenOverview.has('income-expenses')} data-overview-section="income-expenses"><button className="overview-hide" aria-label="Hide Income vs Expenses" title="Hide Income vs Expenses" onClick={() => toggleOverview('income-expenses')}>Hide</button>
             <div className="panel-header"><h2>Income vs Expenses</h2></div>
             <div style={{ width: '100%', height: 280 }}>
               <ResponsiveContainer>
@@ -466,43 +486,48 @@ export default function OverviewPage({ data, ws, setData, setView, onAddMonth }:
             </div>
           </div>
 
-          {outstandingReceivables.length > 0 && (
-            <div className="panel">
-              <div className="panel-header">
-                <h2>Owed to You</h2>
-                <span className="value" style={{ fontSize: 14 }}>Total: {fmt(totalOwed)}</span>
+          <section className="panel month-result" hidden={hiddenOverview.has('monthly-result')} data-overview-section="monthly-result"><button className="overview-hide" aria-label="Hide Monthly result" title="Hide Monthly result" onClick={() => toggleOverview('monthly-result')}>Hide</button>
+            <div className="panel-header">
+              <h2>Monthly result</h2><span className="month-result-period">{monthLabel(monthResultId)}</span>
+            </div>
+            <div className="month-result-layout">
+              <div className="month-result-calculation">
+                <div><span>Income</span><strong>{fmt(monthIncome)}</strong></div>
+                <div><span>Expenses</span><strong>−{fmt(monthExpense)}</strong></div>
+                <div className="month-result-subtotal"><span>Net this month</span><strong>{fmt(monthNet)}</strong></div>
+                <div><span>Still to receive</span><strong>+{fmt(totalOwed)}</strong></div>
+                <div><span>Still to pay</span><strong>−{fmt(totalDebt)}</strong></div>
               </div>
-              <div className="scroll-x">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Person</th><th>Description</th>
-                      <th style={{ textAlign: 'right' }}>Amount</th>
-                      <th>Expected Date</th><th>Month</th><th></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {outstandingReceivables.map((r) => (
-                      <tr key={r.id}>
-                        <td>{r.person || '—'}</td>
-                        <td>{r.description || '—'}</td>
-                        <td className="amount">{fmt(r.amount)}</td>
-                        <td>{r.expectedDate || '—'}</td>
-                        <td>{monthLabel(r.monthId)}</td>
-                        <td className="actions">
-                          <button className="btn ghost small" onClick={() => markReceivablePaid(r.id)} title="Mark as paid back">✓ Paid</button>
-                          <button className="btn ghost small" onClick={() => setView({ type: 'month', id: r.monthId })}>Open</button>
-                          <button className="btn ghost small danger" onClick={() => { if (confirm(`Remove "${r.person || 'this entry'}" (${fmt(r.amount)}) from Owed to You?`)) removeReceivable(r.id) }} title="Remove">✕</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className={`month-result-answer ${projectedPosition < 0 ? 'is-negative' : ''}`}>
+                <span>After outstanding payments</span>
+                <strong>{fmt(projectedPosition)}</strong>
+                <p>Monthly net + money owed to you − money you owe.</p>
+                {totalOwed === 0 && totalDebt === 0 && <small>No outstanding payments to account for.</small>}
               </div>
             </div>
-          )}
+          </section>
 
-          <div className="panel">
+          <div className="overview-ledger" hidden={hiddenOverview.has('receivables')} data-overview-section="receivables"><button className="overview-hide" aria-label="Hide Owed to You" onClick={() => toggleOverview('receivables')}>Hide</button><LedgerPanel
+            title="Owed to You" positive
+            items={outstandingReceivables} total={totalOwed} fmt={fmt}
+            onAdd={() => addToList('receivables', '')}
+            onUpdate={(id, u) => updateList('receivables', id, u)}
+            onRemove={(id) => removeFromList('receivables', id)}
+            onPaid={(id) => markReceivablePaid(id)}
+          /></div>
+
+          <div className="overview-ledger" hidden={hiddenOverview.has('debts')} data-overview-section="debts"><button className="overview-hide" aria-label="Hide You Owe (Debts)" onClick={() => toggleOverview('debts')}>Hide</button><LedgerPanel
+            title="You Owe (Debts)" positive={false}
+            items={outstandingDebts} total={totalDebt} fmt={fmt}
+            onAdd={() => addToList('debts', '')}
+            onUpdate={(id, u) => updateList('debts', id, u)}
+            onRemove={(id) => removeFromList('debts', id)}
+            onPaid={(id) => updateList('debts', id, { paid: true, paidDate: new Date().toISOString().slice(0, 10) })}
+          /></div>
+
+
+          {ws.kind === 'personal' && (
+          <div className="panel" hidden={hiddenOverview.has('freelance')} data-overview-section="freelance"><button className="overview-hide" aria-label="Hide Freelance Clients" title="Hide Freelance Clients" onClick={() => toggleOverview('freelance')}>Hide</button>
             <div className="panel-header">
               <h2>Freelance Clients</h2>
               <span className="value" style={{ fontSize: 14 }}>Outstanding: {fmt(freelanceOutstanding)}</span>
@@ -519,6 +544,7 @@ export default function OverviewPage({ data, ws, setData, setView, onAddMonth }:
                       <th>Work</th>
                       <th style={{ textAlign: 'right' }}>Amount</th>
                       <th>Payment date</th>
+                      <th>Monthly fixed income</th>
                       <th>Status</th>
                       <th></th>
                     </tr>
@@ -547,6 +573,11 @@ export default function OverviewPage({ data, ws, setData, setView, onAddMonth }:
                                 onChange={(e) => updateFreelanceClient(c.id, { paymentDate: e.target.value || undefined })} />
                             </td>
                             <td>
+                              <input type="checkbox" checked={c.fixedIncome ?? false}
+                                aria-label={`Include ${c.client || 'client'} in monthly fixed income`}
+                                onChange={(e) => updateFreelanceClient(c.id, { fixedIncome: e.target.checked })} />
+                            </td>
+                            <td>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                 <button
                                   className="btn ghost small"
@@ -571,7 +602,9 @@ export default function OverviewPage({ data, ws, setData, setView, onAddMonth }:
             )}
           </div>
 
-          <div className="panel">
+          )}
+
+          <div className="panel" hidden={hiddenOverview.has('breakdown')} data-overview-section="breakdown"><button className="overview-hide" aria-label="Hide Spending Breakdown" title="Hide Spending Breakdown" onClick={() => toggleOverview('breakdown')}>Hide</button>
             <div className="panel-header">
               <h2>Spending Breakdown</h2>
               <p>Every category's total across {monthLabel(fromMonth)} – {monthLabel(toMonth)}.</p>
@@ -583,7 +616,7 @@ export default function OverviewPage({ data, ws, setData, setView, onAddMonth }:
           </div>
 
           {/* ── P&L by month — includes ad spend + fixed costs for business ── */}
-          <div className="panel">
+          <div className="panel" hidden={hiddenOverview.has('profit-loss')} data-overview-section="profit-loss"><button className="overview-hide" aria-label="Hide Profit & Loss by Month" title="Hide Profit & Loss by Month" onClick={() => toggleOverview('profit-loss')}>Hide</button>
             <div className="panel-header"><h2>Profit &amp; Loss by Month</h2></div>
             <div className="scroll-x">
               <table>
@@ -655,17 +688,34 @@ export default function OverviewPage({ data, ws, setData, setView, onAddMonth }:
 }
 
 function CategoryBreakdownTable({ title, map, ws }: { title: string; map: Map<string, number>; ws: WorkspaceData }) {
-  const { fmt, curr } = useCurrency()
+  const { fmt } = useCurrency()
+  const [excluded, setExcluded] = useState<Set<string>>(new Set())
   const categoryById = new Map(ws.categories.map((c) => [c.id, c]))
   const rows = Array.from(map.entries())
     .map(([catId, amount]) => ({ cat: categoryById.get(catId), amount }))
     .filter((r) => r.cat && r.amount > 0)
     .sort((a, b) => b.amount - a.amount)
-  const total = rows.reduce((s, r) => s + r.amount, 0)
+  const fullTotal = rows.reduce((s, r) => s + r.amount, 0)
+  const includedTotal = rows.filter((r) => !excluded.has(r.cat!.id)).reduce((s, r) => s + r.amount, 0)
+  const removed = fullTotal - includedTotal
+
+  function toggle(id: string) {
+    setExcluded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   return (
     <div>
-      <h3 style={{ fontSize: 13, color: 'var(--text-muted)', textTransform: 'uppercase', marginTop: 0 }}>{title}</h3>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <h3 style={{ fontSize: 13, color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0 }}>{title}</h3>
+        {excluded.size > 0 && (
+          <button className="btn ghost small" onClick={() => setExcluded(new Set())} style={{ fontSize: 11 }}>Reset ({excluded.size} hidden)</button>
+        )}
+      </div>
       {rows.length === 0 ? (
         <div className="empty-state">No data for this range.</div>
       ) : (
@@ -675,27 +725,112 @@ function CategoryBreakdownTable({ title, map, ws }: { title: string; map: Map<st
               <th>Category</th>
               <th style={{ textAlign: 'right' }}>Amount</th>
               <th style={{ textAlign: 'right' }}>% of Total</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
-              <tr key={r.cat!.id}>
-                <td><CategoryTag category={r.cat!} /></td>
-                <td className="amount">{fmt(r.amount)}</td>
-                <td className="amount" style={{ color: 'var(--text-muted)', fontWeight: 400 }}>
-                  {total > 0 ? `${((r.amount / total) * 100).toFixed(1)}%` : '—'}
-                </td>
-              </tr>
-            ))}
+            {rows.map((r) => {
+              const off = excluded.has(r.cat!.id)
+              return (
+                <tr key={r.cat!.id} style={off ? { opacity: 0.4 } : undefined}>
+                  <td><CategoryTag category={r.cat!} /></td>
+                  <td className="amount" style={off ? { textDecoration: 'line-through' } : undefined}>{fmt(r.amount)}</td>
+                  <td className="amount" style={{ color: 'var(--text-muted)', fontWeight: 400 }}>
+                    {off ? '—' : includedTotal > 0 ? `${((r.amount / includedTotal) * 100).toFixed(1)}%` : '—'}
+                  </td>
+                  <td className="actions">
+                    <button className="btn ghost small" onClick={() => toggle(r.cat!.id)} title={off ? 'Include again' : 'Exclude to see the total without it'}>
+                      {off ? '↩' : '✕'}
+                    </button>
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
           <tfoot>
             <tr>
-              <td>Total</td>
-              <td className="amount">{fmt(total)}</td>
-              <td></td>
+              <td><strong>Total{excluded.size > 0 ? ' (shown)' : ''}</strong></td>
+              <td className="amount"><strong>{fmt(includedTotal)}</strong></td>
+              <td colSpan={2}></td>
             </tr>
+            {removed > 0 && (
+              <tr>
+                <td style={{ color: 'var(--text-muted)', fontSize: 12 }}>Excluded {excluded.size} · full total {fmt(fullTotal)}</td>
+                <td className="amount" style={{ color: 'var(--text-muted)', fontSize: 12 }}>−{fmt(removed)}</td>
+                <td colSpan={2}></td>
+              </tr>
+            )}
           </tfoot>
         </table>
+      )}
+    </div>
+  )
+}
+
+/** Editable dashboard ledger for "owed to you" or "you owe" — add, edit inline, mark paid, remove. */
+function LedgerPanel({ title, positive, items, total, fmt, onAdd, onUpdate, onRemove, onPaid }: {
+  title: string
+  positive: boolean
+  items: Receivable[]
+  total: number
+  fmt: (n: number) => string
+  onAdd: () => void
+  onUpdate: (id: string, updates: Partial<Receivable>) => void
+  onRemove: (id: string) => void
+  onPaid: (id: string) => void
+}) {
+  const amountColor = positive ? 'var(--green)' : 'var(--red)'
+  return (
+    <div className="panel">
+      <div className="panel-header">
+        <h2>{title}</h2>
+        <span className="value" style={{ fontSize: 14, color: amountColor }}>Total: {fmt(total)}</span>
+        <button className="btn secondary small" onClick={onAdd}>+ Add</button>
+      </div>
+      {items.length === 0 ? (
+        <div className="empty-state">
+          {positive ? 'Nothing owed to you right now — click Add to note money you still need to get.' : 'No debts right now — click Add to note money you still owe.'}
+        </div>
+      ) : (
+        <div className="scroll-x">
+          <table>
+            <thead>
+              <tr>
+                <th>{positive ? 'Person' : 'Owed to'}</th>
+                <th>Description</th>
+                <th style={{ textAlign: 'right' }}>Amount</th>
+                <th>Expected date</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((r) => (
+                <tr key={r.id}>
+                  <td>
+                    <input type="text" className="table-input" value={r.person} placeholder={positive ? 'Who owes you' : 'Who you owe'} style={{ minWidth: 130 }}
+                      onChange={(e) => onUpdate(r.id, { person: e.target.value })} />
+                  </td>
+                  <td>
+                    <input type="text" className="table-input" value={r.description ?? ''} placeholder="What for" style={{ minWidth: 150 }}
+                      onChange={(e) => onUpdate(r.id, { description: e.target.value })} />
+                  </td>
+                  <td className="amount" style={{ color: amountColor }}>
+                    <input type="number" step="0.01" className="table-input amount-input" style={{ maxWidth: 110 }} value={r.amount || ''} placeholder="0.00"
+                      onChange={(e) => onUpdate(r.id, { amount: parseFloat(e.target.value) || 0 })} />
+                  </td>
+                  <td>
+                    <input type="date" className="table-input" value={r.expectedDate ?? ''}
+                      onChange={(e) => onUpdate(r.id, { expectedDate: e.target.value || undefined })} />
+                  </td>
+                  <td className="actions">
+                    <button className="btn ghost small" onClick={() => onPaid(r.id)} title={positive ? 'Mark as received' : 'Mark as paid off'}>✓ {positive ? 'Got it' : 'Paid'}</button>
+                    <button className="btn ghost small danger" onClick={() => { if (confirm(`Remove "${r.person || 'this entry'}"?`)) onRemove(r.id) }}>✕</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )

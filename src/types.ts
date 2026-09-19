@@ -37,17 +37,17 @@ export interface MonthData {
 
 // Default net worth category names + colors used to seed new workspaces and for migrating old data.
 export const DEFAULT_NET_WORTH_CATEGORIES: { name: string; type: AssetType; color: string; liquid: boolean }[] = [
-  { name: 'Cash & Bank', type: 'asset', color: '#22c55e', liquid: true },
-  { name: 'Stock Investments', type: 'asset', color: '#6366f1', liquid: true },
-  { name: 'Crypto Investments', type: 'asset', color: '#f97316', liquid: true },
-  { name: 'Business Valuations', type: 'asset', color: '#14b8a6', liquid: false },
-  { name: 'Real Estate', type: 'asset', color: '#f59e0b', liquid: false },
-  { name: 'Vehicle', type: 'asset', color: '#3b82f6', liquid: false },
-  { name: 'Hard Assets', type: 'asset', color: '#a855f7', liquid: false },
-  { name: 'Other Asset', type: 'asset', color: '#94a3b8', liquid: false },
-  { name: 'Credit Card', type: 'liability', color: '#f0506e', liquid: false },
-  { name: 'Loan', type: 'liability', color: '#ef4444', liquid: false },
-  { name: 'Other Liability', type: 'liability', color: '#94a3b8', liquid: false },
+  { name: 'Cash & bank accounts', type: 'asset', color: '#22c55e', liquid: true },
+  { name: 'Stocks & funds', type: 'asset', color: '#6366f1', liquid: true },
+  { name: 'Cryptocurrency', type: 'asset', color: '#f97316', liquid: true },
+  { name: 'Business ownership', type: 'asset', color: '#14b8a6', liquid: false },
+  { name: 'Property', type: 'asset', color: '#f59e0b', liquid: false },
+  { name: 'Vehicles', type: 'asset', color: '#3b82f6', liquid: false },
+  { name: 'Valuables & collectibles', type: 'asset', color: '#a855f7', liquid: false },
+  { name: 'Other assets', type: 'asset', color: '#94a3b8', liquid: false },
+  { name: 'Credit card debt', type: 'liability', color: '#f0506e', liquid: false },
+  { name: 'Loans & mortgages', type: 'liability', color: '#ef4444', liquid: false },
+  { name: 'Other debts', type: 'liability', color: '#94a3b8', liquid: false },
 ]
 
 export interface NetWorthCategoryDef {
@@ -92,8 +92,19 @@ export interface FixedCostItem {
 export type InvoiceType = 'income' | 'expense'
 export type InvoiceStatus = 'paid' | 'unpaid' | 'overdue'
 
+export interface AccountingDocument {
+  id: string
+  month: string // YYYY-MM folder, independent of upload date
+  folder: string
+  name: string
+  data: string // data URL, persisted with workspace
+  size: number
+  uploadedAt: string
+}
+
 /** A business invoice representing money owed to or by the business. */
 export interface Invoice {
+  accountingFolder?: string
   id: string
   type: InvoiceType
   /** Invoice number for accounting, e.g. 'INV-2026-014'. */
@@ -141,6 +152,8 @@ export interface AdSpendEntry {
 
 /** A freelance client and when they're expected to pay. */
 export interface FreelanceClient {
+  /** Count this client’s amount as recurring monthly income, independent of payment status. */
+  fixedIncome?: boolean
   id: string
   client: string
   description?: string
@@ -166,7 +179,10 @@ export interface Receivable {
 export interface ProductCostItem {
   id: string
   label: string
+  /** Cost before VAT; VAT is tracked separately. */
   amount: number
+  /** Supplier VAT rate as a decimal. Undefined means not yet specified. */
+  vatRate?: number
 }
 
 export interface Product {
@@ -380,6 +396,13 @@ export interface WorkspaceData {
   partnerExpenses?: FixedCostItem[]
   /** Invoices for business workspaces (income owed by clients, expenses owed to vendors). */
   invoices?: Invoice[]
+  accountingDocuments?: AccountingDocument[]
+  invoiceFolders?: Record<string, { id: string; name: string; icon: string; hint: string }[]>
+  contractFolders?: string[]
+  hideInvoices?: boolean
+  hideContracts?: boolean
+  hiddenOverviewSections?: string[]
+  hiddenSidebarItems?: string[]
   /** Learned description -> category mappings, keyed by `${type}|${normalizedDescription}`. */
   categoryRules?: Record<string, string>
   /** Learned description -> entry-type mappings, keyed by normalized description (e.g. a bank-to-bank "Pocket Withdrawal" → 'ignore'). */
@@ -390,6 +413,8 @@ export interface WorkspaceData {
   volumeExamples?: VolumeExample[]
   /** Money owed to you by other people. */
   receivables?: Receivable[]
+  /** Money you owe others (debts). Same shape as receivables, opposite direction. */
+  debts?: Receivable[]
   /** Freelance clients and their expected payment dates. */
   freelanceClients?: FreelanceClient[]
   /** Named ad accounts (e.g. NOOMS, PulseAI) with colors for visual separation. */

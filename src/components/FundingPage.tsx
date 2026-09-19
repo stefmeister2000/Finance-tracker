@@ -72,12 +72,42 @@ export default function FundingPage({ ws, setData }: Props) {
   }
 
   return (
-    <div>
+    <div className="clear-page funding-page">
       <div className="page-header">
-        <h2 style={{ margin: 0 }}>Funding &amp; Use of Funds</h2>
+        <h2 style={{ margin: 0 }}>Funding &amp; Spending plan</h2>
         <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>
           Plan and track how you'll spend investor money — allocate the raise into buckets and watch what's left.
         </p>
+      </div>
+
+      <div className="stat-grid">
+        <div className="stat-card">
+          <div className="label">Raised</div>
+          <div className="value">{fmt(raised)}</div>
+        </div>
+        <div className="stat-card">
+          <div className="label">Allocated</div>
+          <div className="value">{fmt(totalPlanned)}</div>
+          <div className="sub">{raised > 0 ? `${((totalPlanned / raised) * 100).toFixed(0)}% of raise` : '—'}</div>
+        </div>
+        <div className="stat-card">
+          <div className="label">Still to allocate</div>
+          <div className={`value ${unallocated < 0 ? 'negative' : ''}`}>{fmt(unallocated)}</div>
+          <div className="sub">{unallocated < 0 ? 'over-allocated' : 'still to plan'}</div>
+        </div>
+        <div className="stat-card">
+          <div className="label">Spent so far</div>
+          <div className="value negative">{fmt(totalSpent)}</div>
+        </div>
+        <div className="stat-card">
+          <div className="label">Cash remaining</div>
+          <div className={`value ${remaining < 0 ? 'negative' : 'positive'}`}>{fmt(remaining)}</div>
+        </div>
+        <div className="stat-card">
+          <div className="label">Months funded</div>
+          <div className="value">{runwayMonths !== undefined ? `${runwayMonths.toFixed(1)} mo` : '—'}</div>
+          <div className="sub">{monthlyBurn > 0 ? `÷ ${fmt(monthlyBurn)}/mo burn` : 'set Fixed Costs'}</div>
+        </div>
       </div>
 
       <div className="panel">
@@ -177,40 +207,10 @@ export default function FundingPage({ ws, setData }: Props) {
         )}
       </div>
 
-      <div className="stat-grid">
-        <div className="stat-card">
-          <div className="label">Raised</div>
-          <div className="value">{fmt(raised)}</div>
-        </div>
-        <div className="stat-card">
-          <div className="label">Allocated</div>
-          <div className="value">{fmt(totalPlanned)}</div>
-          <div className="sub">{raised > 0 ? `${((totalPlanned / raised) * 100).toFixed(0)}% of raise` : '—'}</div>
-        </div>
-        <div className="stat-card">
-          <div className="label">Unallocated</div>
-          <div className={`value ${unallocated < 0 ? 'negative' : ''}`}>{fmt(unallocated)}</div>
-          <div className="sub">{unallocated < 0 ? 'over-allocated' : 'still to plan'}</div>
-        </div>
-        <div className="stat-card">
-          <div className="label">Spent so far</div>
-          <div className="value negative">{fmt(totalSpent)}</div>
-        </div>
-        <div className="stat-card">
-          <div className="label">Remaining</div>
-          <div className={`value ${remaining < 0 ? 'negative' : 'positive'}`}>{fmt(remaining)}</div>
-        </div>
-        <div className="stat-card">
-          <div className="label">Runway on remaining</div>
-          <div className="value">{runwayMonths !== undefined ? `${runwayMonths.toFixed(1)} mo` : '—'}</div>
-          <div className="sub">{monthlyBurn > 0 ? `÷ ${fmt(monthlyBurn)}/mo burn` : 'set Fixed Costs'}</div>
-        </div>
-      </div>
-
       <div className="panel">
         <div className="panel-header">
-          <h2>Use of Funds</h2>
-          <p>Break the raise into buckets. "Planned" is what you earmark; "Spent" is what's gone so far.</p>
+          <h2>Spending plan</h2>
+          <p>Set a budget for each purpose and record what you have spent.</p>
           <button className="btn secondary small" onClick={addAllocation}>+ Add Allocation</button>
         </div>
 

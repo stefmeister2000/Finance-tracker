@@ -1,3 +1,4 @@
+import { adReportingWorkspace } from '../adReporting'
 import { useCurrency } from '../CurrencyContext'
 import { useState } from 'react'
 import { v4 as uuid } from 'uuid'
@@ -17,59 +18,6 @@ function currentMonth(): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
 }
 
-function InlineSpend({
-  campaignId,
-  entries,
-  currency,
-  onUpdate,
-}: {
-  campaignId: string
-  entries: AdSpendEntry[]
-  currency: string
-  onUpdate: (campaignId: string, spend: number) => void
-}) {
-  const { fmt, curr } = useCurrency()
-  const [editing, setEditing] = useState(false)
-  const thisMonth = currentMonth()
-  const entry = entries.find((e) => e.campaignId === campaignId && e.date.startsWith(thisMonth))
-  const current = entry?.spend ?? 0
-  const [draft, setDraft] = useState('')
-
-  if (editing) {
-    return (
-      <input
-        type="number"
-        step="0.01"
-        autoFocus
-        className="table-input amount-input"
-        style={{ maxWidth: 100, textAlign: 'right' }}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={() => {
-          const val = parseFloat(draft)
-          if (!isNaN(val)) onUpdate(campaignId, val)
-          setEditing(false)
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-          if (e.key === 'Escape') setEditing(false)
-        }}
-      />
-    )
-  }
-
-  return (
-    <button
-      className="amount-edit-trigger"
-      style={{ color: 'var(--red)', fontWeight: 600 }}
-      onClick={() => { setDraft(current.toFixed(2)); setEditing(true) }}
-      title="Click to edit this month's spend"
-    >
-      {fmt(current)}
-    </button>
-  )
-}
-
 function toMonthKey(date: string): string {
   return date.slice(0, 7)
 }
@@ -87,12 +35,22 @@ export default function AdSpendPage({ data, ws, setData }: Props) {
   )
   const [datePreset, setDatePreset] = useState<string>('this_month')
 
+  const [tab, setTab] = useState<'overview' | 'campaigns' | 'entries' | 'products' | 'accounts'>('overview')
+  const [reportMonth, setReportMonth] = useState(currentMonth())
+  const [accountFilter, setAccountFilter] = useState('all')
+  const [campaignSearch, setCampaignSearch] = useState('')
+  const [campaignStatus, setCampaignStatus] = useState('all')
   const adAccounts = ws.adAccounts ?? []
   const campaigns = ws.adCampaigns ?? []
   const entries = ws.adSpendEntries ?? []
-  const stats = adCampaignStats(ws)
-  const totals = adSpendTotals(ws)
-  const history = adSpendHistory(ws)
+  const reportMonths = Array.from(new Set([currentMonth(), ...entries.map((e) => e.date.slice(0, 7)), ...(ws.adCategoryBudgets ?? []).map((b) => b.monthId)])).sort().reverse()
+  const reportWorkspace = adReportingWorkspace(ws, reportMonth, accountFilter)
+  const reportCampaigns = reportWorkspace.adCampaigns ?? []
+  const reportEntries = reportWorkspace.adSpendEntries ?? []
+  const stats = adCampaignStats(reportWorkspace)
+  const totals = adSpendTotals(reportWorkspace)
+  const history = adSpendHistory(adReportingWorkspace(ws, 'all', accountFilter)).slice(-12)
+  const visibleStats = stats.filter((s) => (campaignStatus === 'all' || s.campaign.status === campaignStatus) && s.campaign.name.toLowerCase().includes(campaignSearch.toLowerCase()))
   const best = stats.find((s) => s.spend > 0)
 
   const accountById = new Map(adAccounts.map((a) => [a.id, a]))
@@ -138,6 +96,10 @@ export default function AdSpendPage({ data, ws, setData }: Props) {
 
   // ── Campaign CRUD ───────────────────────────────────────────────────────────
   function addCampaign(accountId?: string) {
+    setTab('campaigns')
+    setCampaignSearch('')
+    setCampaignStatus('all')
+    accountId = accountId ?? (accountFilter !== 'all' && accountFilter !== '__none__' ? accountFilter : undefined)
     setData((prev) =>
       updateActiveWorkspace(prev, (w) => ({
         ...w,
@@ -170,13 +132,14 @@ export default function AdSpendPage({ data, ws, setData }: Props) {
 
   // ── Entry CRUD ──────────────────────────────────────────────────────────────
   function addEntry(presetCampaignId?: string) {
-    if (campaigns.length === 0) return
+    if (reportCampaigns.length === 0) return
+    setTab('entries')
     setData((prev) =>
       updateActiveWorkspace(prev, (w) => {
         const newEntry: AdSpendEntry = {
           id: uuid(),
-          campaignId: presetCampaignId ?? (w.adCampaigns ?? [])[0].id,
-          date: `${currentMonth()}-01`,
+          campaignId: presetCampaignId ?? reportCampaigns[0].id,
+          date: `${reportMonth === 'all' ? currentMonth() : reportMonth}-01`,
           spend: 0,
           revenue: 0,
           conversions: 0,
@@ -217,7 +180,9 @@ export default function AdSpendPage({ data, ws, setData }: Props) {
     setShowSetup(false)
   }
 
+  const [syncSuccess, setSyncSuccess] = useState('')
   async function handleSync() {
+    setSyncSuccess('')
     const cfg = ws.metaAdConfig
     const ids = cfg?.adAccountIds?.filter(Boolean) ?? []
     if (!cfg?.accessToken || ids.length === 0) { setShowSetup(true); return }
@@ -231,6 +196,7 @@ export default function AdSpendPage({ data, ws, setData }: Props) {
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error ?? 'Sync failed')
+      setSyncSuccess('Meta import completed successfully.')
       const refreshed = await loadData()
       setData(refreshed)
     } catch (err: unknown) {
@@ -298,13 +264,13 @@ export default function AdSpendPage({ data, ws, setData }: Props) {
   }
 
   // All months that appear in category budgets, plus this month
-  const catMonths = Array.from(new Set([thisMonth, ...categoryBudgets.map((b) => b.monthId)])).sort().reverse()
+  const catMonths = reportMonth === 'all' ? Array.from(new Set([thisMonth, ...categoryBudgets.map((b) => b.monthId)])).sort().reverse() : [reportMonth]
 
-  const sortedEntries = entries.slice().sort((a, b) => b.date.localeCompare(a.date))
+  const sortedEntries = reportEntries.slice().sort((a, b) => b.date.localeCompare(a.date))
 
   // Group campaigns by account (unassigned goes to a special bucket)
   const groupedCampaigns = new Map<string, typeof stats>()
-  for (const s of stats) {
+  for (const s of visibleStats) {
     const key = s.campaign.accountId ?? '__none__'
     if (!groupedCampaigns.has(key)) groupedCampaigns.set(key, [])
     groupedCampaigns.get(key)!.push(s)
@@ -312,36 +278,39 @@ export default function AdSpendPage({ data, ws, setData }: Props) {
 
   return (
     <div>
-      {/* ── Header ── */}
-      <div className="page-header">
-        <h2 style={{ margin: 0 }}>Ad Spend</h2>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <select className="table-input" value={datePreset} onChange={(e) => setDatePreset(e.target.value)} style={{ minWidth: 140 }}>
-            <option value="this_month">This month</option>
-            <option value="last_month">Last month</option>
-            <option value="last_30d">Last 30 days</option>
-            <option value="last_90d">Last 90 days</option>
-          </select>
-          <button className="btn secondary small" onClick={handleSync} disabled={syncing}>
-            {syncing ? 'Syncing…' : '↻ Sync from Meta'}
-          </button>
-          <button className="btn ghost small" onClick={() => { setTokenDraft(ws.metaAdConfig?.accessToken ?? ''); setAccountsDraft(ws.metaAdConfig?.adAccountIds?.length ? ws.metaAdConfig.adAccountIds : ['']); setShowSetup((v) => !v) }}>
-            ⚙ Meta Setup
-          </button>
+      <div className="page-header ads-header">
+        <div><div className="ads-eyebrow">MARKETING / PERFORMANCE</div><h2 style={{ margin: '6px 0' }}>Ad Spend</h2><p className="drive-muted" style={{ margin: 0 }}>See what you spend, what comes back, and which campaigns deliver.</p></div>
+        <div className="ads-actions">
+          <button className="btn secondary" onClick={() => { setTab('accounts'); setShowSetup(true) }}>Meta settings</button>
+          <button className="btn accent" onClick={() => reportCampaigns.length ? addEntry() : addCampaign()}>{reportCampaigns.length ? '+ Log spend manually' : '+ Add campaign manually'}</button>
         </div>
       </div>
+      <div className="ads-tabs" role="tablist" aria-label="Ad spend sections">
+        {([['overview', 'Overview'], ['campaigns', 'Campaigns'], ['entries', 'Spend log'], ['products', 'Product tracking'], ['accounts', 'Accounts & sync']] as const).map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}
+      </div>
+      {tab !== 'accounts' && <div className="ads-filters">
+        <label>Reporting period<select aria-label="Reporting period" value={reportMonth} onChange={(e) => setReportMonth(e.target.value)}><option value="all">All time</option>{reportMonths.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}</select></label>
+        {tab !== 'products' && <label>Ad account<select aria-label="Report ad account" value={accountFilter} onChange={(e) => setAccountFilter(e.target.value)}><option value="all">All accounts</option>{adAccounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}<option value="__none__">Unassigned</option></select></label>}
+        <span className="drive-muted">{tab === 'products' ? 'Product tracking is entered separately from campaign spend.' : `${reportEntries.length} entries · ${reportMonth === 'all' ? 'All time' : monthLabel(reportMonth)}`}</span>
+      </div>}
+      {tab === 'accounts' && <div className="panel"><div className="panel-header"><h2>Optional Meta import</h2><span className="drive-muted">{ws.metaAdConfig?.accessToken && ws.metaAdConfig.adAccountIds?.length ? 'Credentials saved · run sync to verify access' : 'Not connected · manual tracking ready'}</span><p>Manual tracking is always available. Meta is the only supported connection; other platforms can be entered manually.</p></div><div className="ads-actions">
+        <select aria-label="Meta sync period" value={datePreset} onChange={(e) => setDatePreset(e.target.value)}><option value="this_month">This month</option><option value="last_month">Last month</option><option value="last_30d">Last 30 days</option><option value="last_90d">Last 90 days</option></select>
+        <button className="btn accent" onClick={handleSync} disabled={syncing}>{syncing ? 'Syncing…' : 'Sync from Meta'}</button>
+        <button className="btn secondary" onClick={() => setShowSetup((v) => !v)}>Connection settings</button>
+      </div></div>}
 
+      {syncSuccess && <p role="status" className="panel">{syncSuccess}</p>}
       {syncError && (
         <div className="panel" style={{ background: 'var(--red-soft, #ef444420)', borderColor: 'var(--red)', marginBottom: 12 }}>
-          <p style={{ margin: 0, color: 'var(--red)', fontSize: 13 }}>Sync error: {syncError}</p>
+          <p style={{ margin: 0, color: 'var(--red)', fontSize: 13 }}>Meta import failed: {syncError}. You can continue logging spend manually.</p>
         </div>
       )}
 
-      {showSetup && (
+      {tab === 'accounts' && showSetup && (
         <div className="panel" style={{ marginBottom: 12 }}>
           <div className="panel-header">
             <h2>Meta Ads Setup</h2>
-            <p>Enter your Meta access token and ad account IDs to enable auto-sync.</p>
+            <p>Optional: save your Meta access token and account IDs, then run Sync from Meta to verify access and import spend.</p>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 480 }}>
             <div className="field">
@@ -371,41 +340,24 @@ export default function AdSpendPage({ data, ws, setData }: Props) {
         </div>
       )}
 
-      {/* ── Stat cards: total + per account ── */}
-      <div className="stat-grid">
-        <div className="stat-card">
-          <div className="label">Total Ad Spend</div>
-          <div className="value negative">{fmt(totals.spend)}</div>
-        </div>
-        {adAccounts.map((acc) => {
-          const spend = spendByAccount.get(acc.id) ?? 0
-          return (
-            <div key={acc.id} className="stat-card" style={{ borderLeft: `4px solid ${acc.color}` }}>
-              <div className="label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: acc.color, display: 'inline-block', flexShrink: 0 }} />
-                {acc.name}
-              </div>
-              <div className="value negative">{fmt(spend)}</div>
-              <div className="sub">{totals.spend > 0 ? `${((spend / totals.spend) * 100).toFixed(0)}% of total` : '—'}</div>
-            </div>
-          )
-        })}
-        <div className="stat-card">
-          <div className="label">Overall ROAS</div>
-          <div className="value">{totals.roas !== null ? `${totals.roas.toFixed(2)}x` : '—'}</div>
-          <div className="sub">revenue ÷ spend</div>
-        </div>
-        <div className="stat-card">
-          <div className="label">Best Performer</div>
-          <div className="value">{best ? best.campaign.name : '—'}</div>
-          <div className="sub">{best && best.roas !== null ? `${best.roas.toFixed(2)}x ROAS` : 'no spend logged yet'}</div>
-        </div>
-      </div>
-
+      {(tab === 'overview' || tab === 'campaigns') && <div className="stat-grid ads-metrics">
+        <div className="stat-card"><div className="label">Ad spend</div><div className="value">{fmt(totals.spend)}</div><div className="sub">Selected period & account</div></div>
+        <div className="stat-card"><div className="label">Tracked revenue</div><div className="value positive">{fmt(totals.revenue)}</div><div className="sub">Attributed to campaigns</div></div>
+        <div className="stat-card"><div className="label">Return on ad spend</div><div className="value">{totals.roas !== null ? `${totals.roas.toFixed(2)}×` : '—'}</div><div className="sub">Revenue ÷ ad spend</div></div>
+        <div className="stat-card"><div className="label">Cost per conversion</div><div className="value">{totals.conversions > 0 ? fmt(totals.spend / totals.conversions) : '—'}</div><div className="sub">{totals.conversions} recorded conversions</div></div>
+      </div>}
+      {tab === 'overview' && <>
+        {reportEntries.length === 0 ? <div className="panel ads-empty"><h3>No spend recorded for this selection</h3><p className="drive-muted">Choose another month or account, log spend manually, or connect Meta to get started.</p><button className="btn secondary" onClick={() => reportCampaigns.length ? addEntry() : addCampaign()}>{reportCampaigns.length ? 'Log spend manually' : 'Create a campaign'}</button></div> : <div className="panel">
+          <div className="panel-header"><h2>Campaign performance</h2><p>{best ? `Highest tracked ROAS: ${best.campaign.name}` : 'Compare campaigns in the selected period.'}</p><button className="btn ghost small" onClick={() => setTab('campaigns')}>Manage campaigns →</button></div>
+          <div className="scroll-x"><table><thead><tr><th>Campaign</th><th>Spend</th><th>Revenue</th><th>ROAS</th><th>Conversions</th></tr></thead><tbody>
+            {stats.filter((s) => s.entryCount > 0).slice(0, 8).map((s) => <tr key={s.campaign.id}><td><strong>{s.campaign.name}</strong><div className="drive-muted">{accountById.get(s.campaign.accountId ?? '')?.name ?? 'Unassigned'} · {s.campaign.status}</div></td><td>{fmt(s.spend)}</td><td>{fmt(s.revenue)}</td><td>{s.roas !== null ? `${s.roas.toFixed(2)}×` : '—'}</td><td>{s.conversions}</td></tr>)}
+          </tbody></table></div>
+          <p className="drive-muted">ROAS reflects recorded revenue, not profit. Product costs and fees are not included.</p>
+        </div>}
       {/* ── Chart ── */}
       {history.length > 0 && (
         <div className="panel">
-          <div className="panel-header"><h2>Spend vs Revenue by Month</h2></div>
+          <div className="panel-header"><h2>Monthly trend</h2><p>Last 12 recorded months for the selected account.</p></div>
           <div style={{ width: '100%', height: 260 }}>
             <ResponsiveContainer>
               <BarChart data={history.map((h) => ({ ...h, label: monthLabel(h.month) }))}>
@@ -422,6 +374,8 @@ export default function AdSpendPage({ data, ws, setData }: Props) {
         </div>
       )}
 
+      </>}
+      {tab === 'products' && <>
       {/* ── Ad spend by product category ── */}
       <div className="panel">
         <div className="panel-header">
@@ -572,7 +526,8 @@ export default function AdSpendPage({ data, ws, setData }: Props) {
                 const prev = catMonths[0]
                 const [y, m] = prev.split('-').map(Number)
                 const next = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`
-                if (!catMonths.includes(next)) {
+                setReportMonth(next)
+                if (!categoryBudgets.some((b) => b.monthId === next)) {
                   setData((d) => updateActiveWorkspace(d, (w) => ({
                     ...w,
                     adCategoryBudgets: [...(w.adCategoryBudgets ?? []), { id: uuid(), productCategory: productCategories[0], monthId: next, spend: 0, revenue: 0 }],
@@ -587,10 +542,12 @@ export default function AdSpendPage({ data, ws, setData }: Props) {
       </div>
 
       {/* ── Accounts management ── */}
+      </>}
+      {tab === 'accounts' && <>
       <div className="panel">
         <div className="panel-header">
           <h2>Ad Accounts</h2>
-          <p>Name each ad account and give it a color to separate spend across NOOMS, PulseAI, etc.</p>
+          <p>Organise your campaigns by ad account.</p>
           <button className="btn secondary small" onClick={addAccount}>+ Add Account</button>
         </div>
         {adAccounts.length === 0 ? (
@@ -624,15 +581,18 @@ export default function AdSpendPage({ data, ws, setData }: Props) {
         )}
       </div>
 
+      </>}
+      {tab === 'campaigns' && <>
+      <div className="ads-filters"><input aria-label="Search campaigns" placeholder="Search campaigns…" value={campaignSearch} onChange={(e) => setCampaignSearch(e.target.value)} /><select aria-label="Campaign status" value={campaignStatus} onChange={(e) => setCampaignStatus(e.target.value)}><option value="all">All statuses</option><option value="active">Active</option><option value="paused">Paused</option><option value="ended">Ended</option></select></div>
       {/* ── Campaigns grouped by account ── */}
       <div className="panel">
         <div className="panel-header">
           <h2>Campaigns</h2>
-          <p>Grouped by account, ranked by spend. Assign campaigns to accounts using the Account column.</p>
+          <p>Grouped by account and ranked by ROAS for the selected period. Edit amounts in Spend log.</p>
           <button className="btn secondary small" onClick={() => addCampaign()}>+ Add Campaign</button>
         </div>
-        {campaigns.length === 0 ? (
-          <div className="empty-state">No campaigns yet — sync from Meta or add one manually.</div>
+        {visibleStats.length === 0 ? (
+          <div className="empty-state">{campaigns.length === 0 ? 'No campaigns yet — sync from Meta or add one manually.' : 'No campaigns match these filters.'}</div>
         ) : (
           <>
             {/* Render each account group */}
@@ -694,33 +654,7 @@ export default function AdSpendPage({ data, ws, setData }: Props) {
                                 </select>
                               </td>
                               <td className="amount negative">
-                                <InlineSpend
-                                  campaignId={s.campaign.id}
-                                  entries={entries}
-                                  currency={curr}
-                                  onUpdate={(campaignId, spend) => {
-                                    setData((prev) =>
-                                      updateActiveWorkspace(prev, (w) => {
-                                        const month = `${currentMonth()}-01`
-                                        const existing = (w.adSpendEntries ?? []).find(
-                                          (e) => e.campaignId === campaignId && e.date.startsWith(currentMonth())
-                                        )
-                                        let entries: AdSpendEntry[]
-                                        if (existing) {
-                                          entries = (w.adSpendEntries ?? []).map((e) =>
-                                            e.id === existing.id ? { ...e, spend } : e
-                                          )
-                                        } else {
-                                          entries = [
-                                            ...(w.adSpendEntries ?? []),
-                                            { id: uuid(), campaignId, date: month, spend, revenue: 0, conversions: 0, clicks: 0 },
-                                          ]
-                                        }
-                                        return reconcileAdSpendTransactions({ ...w, adSpendEntries: entries })
-                                      })
-                                    )
-                                  }}
-                                />
+                                {fmt(s.spend)}
                               </td>
                               <td className="amount positive">{fmt(s.revenue)}</td>
                               <td className="amount">{s.roas !== null ? `${s.roas.toFixed(2)}x` : '—'}</td>
@@ -741,12 +675,14 @@ export default function AdSpendPage({ data, ws, setData }: Props) {
         )}
       </div>
 
+      </>}
+      {tab === 'entries' && <>
       {/* ── Spend Log ── */}
       <div className="panel">
         <div className="panel-header">
           <h2>Spend Log</h2>
-          <p>One row per campaign per month. Edit spend, revenue and conversions here.</p>
-          <button className="btn secondary small" onClick={() => addEntry()} disabled={campaigns.length === 0}>+ Add Entry</button>
+          <p>Entries for the selected period and account. Changes update the report and linked expense transactions.</p>
+          <button className="btn secondary small" onClick={() => addEntry()} disabled={reportCampaigns.length === 0}>+ Add Entry</button>
         </div>
         {sortedEntries.length === 0 ? (
           <div className="empty-state">No spend logged yet — sync from Meta or add manually.</div>
@@ -828,6 +764,7 @@ export default function AdSpendPage({ data, ws, setData }: Props) {
           </div>
         )}
       </div>
+      </>}
     </div>
   )
 }

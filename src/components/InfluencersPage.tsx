@@ -54,7 +54,7 @@ export default function InfluencersPage({ ws, setData }: Props) {
   }
 
   return (
-    <div>
+    <div className="clear-page influencers-page">
       <div className="page-header">
         <h2 style={{ margin: 0 }}>Influencers &amp; Affiliates</h2>
         <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>
@@ -64,8 +64,8 @@ export default function InfluencersPage({ ws, setData }: Props) {
 
       <div className="panel">
         <div className="panel-header">
-          <h2>Partners</h2>
-          <p>Commission is calculated on net (ex-VAT) revenue including extra charges. Assign specific products or leave empty for all.</p>
+          <h2>Commission partners <span className="drive-muted">({influencers.length})</span></h2>
+          <p>Set each partner’s commission, then open Product profitability to see your earnings per sale.</p>
           <button className="btn secondary small" onClick={addInfluencer}>+ Add Partner</button>
         </div>
 
@@ -78,34 +78,34 @@ export default function InfluencersPage({ ws, setData }: Props) {
             const linked = linkedProducts(inf)
             const expanded = expandedId === inf.id
             return (
-              <div key={inf.id} style={{ border: '1px solid var(--border)', borderRadius: 12, background: 'var(--bg-elevated)', overflow: 'hidden' }}>
+              <div className="partner-card" key={inf.id} style={{ border: '1px solid var(--border)', borderRadius: 12, background: 'var(--bg-elevated)', overflow: 'hidden' }}>
                 {/* Header row */}
-                <div style={{ padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', borderBottom: expanded ? '1px solid var(--border)' : 'none' }}>
-                  <input
+                <div className="partner-fields" style={{ padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', borderBottom: expanded ? '1px solid var(--border)' : 'none' }}>
+                  <label className="labelled-field">Partner name<input
                     type="text"
                     className="table-input"
                     value={inf.name}
                     onChange={(e) => updateInfluencer(inf.id, { name: e.target.value })}
                     style={{ fontWeight: 700, fontSize: 15, width: 180 }}
                     placeholder="Partner name"
-                  />
-                  <select
+                  /></label>
+                  <label className="labelled-field">Platform<select
                     className="table-input"
                     value={inf.platform}
                     onChange={(e) => updateInfluencer(inf.id, { platform: e.target.value })}
                     style={{ width: 130 }}
                   >
                     {PLATFORMS.map((pl) => <option key={pl} value={pl}>{pl}</option>)}
-                  </select>
-                  <input
+                  </select></label>
+                  <label className="labelled-field">Handle<input
                     type="text"
                     className="table-input"
                     value={inf.handle ?? ''}
                     onChange={(e) => updateInfluencer(inf.id, { handle: e.target.value })}
                     style={{ width: 140 }}
                     placeholder="@handle"
-                  />
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  /></label>
+                  <label className="labelled-field">Commission (%)
                     <input
                       type="number"
                       min={0}
@@ -118,8 +118,8 @@ export default function InfluencersPage({ ws, setData }: Props) {
                       placeholder="0"
                     />
                     <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>% commission</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  </label>
+                  <label className="labelled-field">Extra fee per sale
                     <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>+ {ws.currency}</span>
                     <input
                       type="number"
@@ -132,10 +132,10 @@ export default function InfluencersPage({ ws, setData }: Props) {
                       placeholder="0.00"
                     />
                     <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>/ sale</span>
-                  </div>
+                  </label>
                   <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
                     <button className="btn ghost small" onClick={() => setExpandedId(expanded ? null : inf.id)}>
-                      {expanded ? '▲ Hide impact' : `▼ Margin impact (${linked.length})`}
+                      {expanded ? 'Hide profitability' : `Product profitability (${linked.length})`}
                     </button>
                     <button className="btn ghost small" onClick={() => { if (confirm(`Remove "${inf.name}"?`)) removeInfluencer(inf.id) }} title="Remove partner">✕</button>
                   </div>
@@ -145,7 +145,7 @@ export default function InfluencersPage({ ws, setData }: Props) {
                   <div style={{ padding: '12px 16px' }}>
                     {/* Product assignment */}
                     <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', marginBottom: 8 }}>
-                      Products promoted {((inf.productIds ?? []).length === 0) && '(none selected = all products)'}
+                      Products promoted {((inf.productIds ?? []).length === 0) && '(all products included)'}
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 16 }}>
                       {products.map((p) => {

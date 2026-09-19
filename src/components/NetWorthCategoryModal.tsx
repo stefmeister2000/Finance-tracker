@@ -43,7 +43,7 @@ export default function NetWorthCategoryModal({ ws, type, setData, onClose }: Pr
 
         if (usedByAccounts) {
           // Reassign accounts to a fallback "Other" category of the same type, creating one if needed.
-          const fallbackName = type === 'asset' ? 'Other Asset' : 'Other Liability'
+          const fallbackName = type === 'asset' ? 'Other assets' : 'Other debts'
           let fallback = remaining.find((c) => c.type === type && c.name.toLowerCase() === fallbackName.toLowerCase())
           if (!fallback) {
             fallback = { id: uuid(), name: fallbackName, type, color: '#94a3b8', liquid: false }

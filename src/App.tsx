@@ -1,3 +1,4 @@
+import PageFrame from './components/PageFrame'
 import { useEffect, useRef, useState } from 'react'
 import type { AppData } from './types'
 import {
@@ -267,7 +268,7 @@ export default function App() {
   // if the current view doesn't make sense for the active workspace.
   const view: View =
     (rawView.type === 'networth' && ws.kind !== 'personal') ||
-    (rawView.type === 'invoices' && ws.kind !== 'business') ||
+    (rawView.type === 'invoices' && (ws.kind !== 'business' || ws.hideInvoices)) ||
     (rawView.type === 'adspend' && ws.kind !== 'business') ||
     (rawView.type === 'influencers' && ws.kind !== 'business') ||
     (rawView.type === 'retail' && ws.kind !== 'business') ||
@@ -276,7 +277,7 @@ export default function App() {
     (rawView.type === 'inventory' && ws.kind !== 'business') ||
     (rawView.type === 'startup' && ws.kind !== 'business') ||
     (rawView.type === 'tools' && ws.kind !== 'business') ||
-    (rawView.type === 'contracts' && ws.kind !== 'business')
+    (rawView.type === 'contracts' && (ws.kind !== 'business' || ws.hideContracts))
       ? { type: 'overview' }
       : rawView
 
@@ -322,6 +323,12 @@ export default function App() {
         onRenameWorkspace={renameWs}
         onReorderWorkspaces={reorderWs}
         onSetWorkspaceIcon={setWsIcon}
+        onSetSidebarHidden={(id, hidden) => setData((prev) => updateActiveWorkspace(prev, (w) => ({
+          ...w,
+          hiddenSidebarItems: hidden ? Array.from(new Set([...(w.hiddenSidebarItems ?? []), id])) : (w.hiddenSidebarItems ?? []).filter((item) => item !== id),
+          ...(id === 'invoices' ? { hideInvoices: hidden } : {}),
+          ...(id === 'contracts' ? { hideContracts: hidden } : {}),
+        })))}
         onSetWorkspaceHidden={setWsHidden}
         lastSaved={lastSaved}
         saveFailed={saveFailed}
@@ -336,7 +343,8 @@ export default function App() {
           canUndo={past.length > 0 || pendingSnapshot.current !== null}
           canRedo={future.length > 0}
         />
-        <div className="main">
+        <div className="main" data-page={view.type}>
+          <PageFrame pageKey={`${data.activeWorkspace}:${view.type}:${view.type === 'month' ? view.id : ''}`}>
           {view.type === 'overview' && <OverviewPage data={data} ws={ws} setData={setData} setView={setView} onAddMonth={addMonth} />}
           {view.type === 'month' && ws.months[view.id] && (
             <MonthPage
@@ -349,11 +357,11 @@ export default function App() {
               onNavigateMonth={(id) => setView({ type: 'month', id })}
             />
           )}
-          {view.type === 'networth' && <NetWorthPage data={data} ws={ws} setData={setData} />}
-          {view.type === 'subscriptions' && <SubscriptionsPage data={data} ws={ws} setData={setData} />}
-          {view.type === 'budget' && <BudgetPage data={data} ws={ws} setData={setData} />}
-          {view.type === 'invoices' && <InvoicesPage data={data} ws={ws} setData={setData} />}
-          {view.type === 'adspend' && <AdSpendPage data={data} ws={ws} setData={setData} />}
+          {view.type === 'networth' && <NetWorthPage key={data.activeWorkspace} data={data} ws={ws} setData={setData} />}
+          {view.type === 'subscriptions' && <SubscriptionsPage key={data.activeWorkspace} data={data} ws={ws} setData={setData} />}
+          {view.type === 'budget' && <BudgetPage key={data.activeWorkspace} data={data} ws={ws} setData={setData} />}
+          {view.type === 'invoices' && <InvoicesPage key={data.activeWorkspace} data={data} ws={ws} setData={setData} />}
+          {view.type === 'adspend' && <AdSpendPage key={data.activeWorkspace} data={data} ws={ws} setData={setData} />}
           {view.type === 'influencers' && <InfluencersPage data={data} ws={ws} setData={setData} />}
           {view.type === 'retail' && <RetailPage data={data} ws={ws} setData={setData} />}
           {view.type === 'funding' && <FundingPage data={data} ws={ws} setData={setData} />}
@@ -361,7 +369,8 @@ export default function App() {
           {view.type === 'inventory' && <InventoryPage data={data} ws={ws} setData={setData} />}
           {view.type === 'startup' && <StartupCostsPage data={data} ws={ws} setData={setData} />}
           {view.type === 'tools' && <BusinessToolsPage data={data} ws={ws} setData={setData} />}
-          {view.type === 'contracts' && <ContractsPage data={data} ws={ws} setData={setData} />}
+          {view.type === 'contracts' && <ContractsPage key={data.activeWorkspace} data={data} ws={ws} setData={setData} />}
+          </PageFrame>
         </div>
       </div>
       {settingsOpen && <SettingsModal data={data} setData={setData} onClose={() => setSettingsOpen(false)} />}

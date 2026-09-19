@@ -43,8 +43,8 @@ export default function QuickAddModal({ ws, monthId, setData, onClose }: Props) 
     alreadyAdded: existingDescs.has(s.description.toLowerCase().trim()),
   }))
 
-  // Also include auto-detected subscriptions not in manualSubscriptions
-  const detected = useMemo(() => detectSubscriptions(ws), [ws])
+  // Include only explicitly confirmed subscriptions not already in the manual list
+  const detected = useMemo(() => detectSubscriptions(ws).filter(s => s.flaggedRecurring), [ws])
   const manualDescs = new Set((ws.manualSubscriptions ?? []).map((s) => s.description.toLowerCase()))
   const detectedItems: QuickItem[] = detected
     .filter((d) => !manualDescs.has(d.description.toLowerCase()))

@@ -1,595 +1,88 @@
 import { useCurrency } from '../CurrencyContext'
 import { useState } from 'react'
 import { v4 as uuid } from 'uuid'
-import { LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import type { AppData, AssetType, NetWorthAccount, WorkspaceData } from '../types'
-import { guessNetWorthCategory } from '../categorize'
 import { currentMonthId, monthLabel, updateActiveWorkspace } from '../storage'
-import {
-  accountValueAt,
-  allMonthIds,
-  formatCurrency,
-  liquidNetWorth,
-  netWorthAtMonth,
-  netWorthByCategory,
-  netWorthHistory,
-} from '../utils'
-import type { NetWorthCategoryGroup } from '../utils'
+import { accountValueAt, allMonthIds, liquidNetWorth, netWorthAtMonth, netWorthHistory } from '../utils'
 import NetWorthCategoryModal from './NetWorthCategoryModal'
 
-interface Props {
-  data: AppData
-  ws: WorkspaceData
-  setData: React.Dispatch<React.SetStateAction<AppData>>
-}
+interface Props { data: AppData; ws: WorkspaceData; setData: React.Dispatch<React.SetStateAction<AppData>> }
+type Draft = { id: string; name: string; category: string; notes: string; type: AssetType; balance: string; isNew?: boolean }
 
 export default function NetWorthPage({ ws, setData }: Props) {
-  const { fmt, curr } = useCurrency()
+  const { fmt } = useCurrency()
   const months = allMonthIds(ws)
-  const [monthId, setMonthId] = useState(() => {
-    const cur = currentMonthId()
-    if (months.includes(cur)) return cur
-    return months.length ? months[months.length - 1] : cur
-  })
-  const [managingCategories, setManagingCategories] = useState<AssetType | null>(null)
-
-  const allMonths = months.includes(monthId) ? months : [...months, monthId].sort()
-  const idx = allMonths.indexOf(monthId)
-  const prevMonthId = idx > 0 ? allMonths[idx - 1] : undefined
-
-  const totalAssets = ws.netWorthAccounts
-    .filter((a) => a.type === 'asset')
-    .reduce((s, a) => s + accountValueAt(a, monthId), 0)
-  const totalLiabilities = ws.netWorthAccounts
-    .filter((a) => a.type === 'liability')
-    .reduce((s, a) => s + accountValueAt(a, monthId), 0)
-  const netWorth = totalAssets - totalLiabilities
+  const [monthId, setMonthId] = useState(() => months.includes(currentMonthId()) ? currentMonthId() : months[months.length - 1] ?? currentMonthId())
+  const [tab, setTab] = useState<'accounts' | 'allocation' | 'history'>('accounts')
+  const [kind, setKind] = useState<AssetType>('asset')
+  const [search, setSearch] = useState('')
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [draft, setDraft] = useState<Draft | null>(null)
+  const [managing, setManaging] = useState<AssetType | null>(null)
+  const allMonths = [...new Set([...months, monthId])].sort()
+  const previous = allMonths[allMonths.indexOf(monthId) - 1]
+  const accounts = ws.netWorthAccounts
+  const totalFor = (type: AssetType) => accounts.filter(a => a.type === type).reduce((sum, a) => sum + accountValueAt(a, monthId), 0)
+  const assets = totalFor('asset'), debts = totalFor('liability'), net = assets - debts
   const liquid = liquidNetWorth(ws, monthId)
-  const prevNetWorth = prevMonthId ? netWorthAtMonth(ws, prevMonthId) : undefined
-  const change = prevNetWorth !== undefined ? netWorth - prevNetWorth : undefined
-  const changePct = change !== undefined && prevNetWorth ? (change / Math.abs(prevNetWorth)) * 100 : undefined
+  const change = previous ? net - netWorthAtMonth(ws, previous) : undefined
+  const history = netWorthHistory(ws).map(d => ({ ...d, label: monthLabel(d.month) }))
+  const categories = ws.netWorthCategories.filter(c => c.type === kind)
+  const visible = accounts.filter(a => a.type === kind && `${a.name} ${a.notes ?? ''}`.toLowerCase().includes(search.toLowerCase()))
+  const groups = [...categories.map(c => ({ id: c.id, name: c.name, color: c.color, liquid: c.liquid, accounts: visible.filter(a => a.category === c.id) })),
+    { id: '', name: 'Uncategorised', color: '#94a3b8', liquid: false, accounts: visible.filter(a => !categories.some(c => c.id === a.category)) }]
+    .filter(g => g.accounts.length > 0)
+  const allocation = ws.netWorthCategories.filter(c => c.type === 'asset').map(c => ({ ...c, value: accounts.filter(a => a.type === 'asset' && a.category === c.id).reduce((s,a) => s + accountValueAt(a,monthId),0) }))
+  const unassigned = accounts.filter(a => a.type === 'asset' && !allocation.some(c => c.id === a.category)).reduce((s,a) => s + accountValueAt(a,monthId),0)
+  if (unassigned) allocation.push({ id: 'unassigned', name: 'Uncategorised', color: '#94a3b8', type: 'asset', liquid: false, value: unassigned })
+  allocation.sort((a,b) => b.value - a.value)
 
-  const history = netWorthHistory(ws).map((d) => ({ ...d, label: monthLabel(d.month) }))
-
-  const assetGroups = netWorthByCategory(ws, 'asset', monthId)
-  const liabilityGroups = netWorthByCategory(ws, 'liability', monthId)
-
-  const categoryIds = new Set(ws.netWorthCategories.map((c) => c.id))
-  const ungroupedAssets = ws.netWorthAccounts.filter((a) => a.type === 'asset' && !categoryIds.has(a.category))
-  const ungroupedLiabilities = ws.netWorthAccounts.filter(
-    (a) => a.type === 'liability' && !categoryIds.has(a.category),
-  )
-
-  function addAccount(type: AssetType, categoryId = '') {
-    setData((prev) =>
-      updateActiveWorkspace(prev, (w) => ({
-        ...w,
-        netWorthAccounts: [
-          ...w.netWorthAccounts,
-          {
-            id: uuid(),
-            name: type === 'asset' ? 'New Asset' : 'New Liability',
-            type,
-            category: categoryId,
-            values: {},
-          },
-        ],
-      })),
-    )
+  function edit(account?: NetWorthAccount, category = '') {
+    setDraft(account ? { id: account.id, name: account.name, category: account.category, notes: account.notes ?? '', type: account.type, balance: String(accountValueAt(account,monthId)) }
+      : { id: uuid(), name: '', category, notes: '', type: kind, balance: '', isNew: true })
   }
-
-  function removeAccount(id: string) {
-    setData((prev) =>
-      updateActiveWorkspace(prev, (w) => ({
-        ...w,
-        netWorthAccounts: w.netWorthAccounts.filter((a) => a.id !== id),
-      })),
-    )
+  function save(e: React.FormEvent) {
+    e.preventDefault()
+    if (!draft || !draft.name.trim() || draft.balance.trim() === '' || !Number.isFinite(Number(draft.balance)) || Number(draft.balance) < 0) return
+    const saved = draft
+    setData(prev => updateActiveWorkspace(prev, w => {
+      const old = w.netWorthAccounts.find(a => a.id === saved.id)
+      const account: NetWorthAccount = { ...old, id: saved.id, name: saved.name.trim(), category: saved.category, notes: saved.notes.trim(), type: saved.type, values: { ...(old?.values ?? {}), [monthId]: Number(saved.balance) } }
+      return { ...w, netWorthAccounts: saved.isNew ? [...w.netWorthAccounts, account] : w.netWorthAccounts.map(a => a.id === saved.id ? account : a) }
+    }))
+    setDraft(null)
   }
-
-  function updateAccount(id: string, updates: { name?: string; category?: string; notes?: string }) {
-    setData((prev) =>
-      updateActiveWorkspace(prev, (w) => ({
-        ...w,
-        netWorthAccounts: w.netWorthAccounts.map((a) => (a.id === id ? { ...a, ...updates } : a)),
-      })),
-    )
+  function remove() {
+    if (!draft || !confirm(`Remove “${draft.name}” and its monthly balances? You can undo this change.`)) return
+    const id = draft.id
+    setData(prev => updateActiveWorkspace(prev,w => ({ ...w, netWorthAccounts: w.netWorthAccounts.filter(a => a.id !== id) })))
+    setDraft(null)
   }
+  const chart = <ResponsiveContainer width="100%" height="100%"><LineChart data={history} margin={{top: 16,right: 20,left: 12,bottom: 0}}><CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="4 5"/><XAxis dataKey="label" axisLine={false} tickLine={false} fontSize={11} minTickGap={30}/><YAxis width={65} axisLine={false} tickLine={false} fontSize={11} tickFormatter={v => `${Math.round(v/1000)}k`}/><Tooltip formatter={(v: number) => fmt(v)} contentStyle={{borderRadius:12,border:'1px solid var(--border)'}}/><Line dataKey="netWorth" name="Net worth" stroke="#228877" strokeWidth={3} dot={false} activeDot={{r:5}} /></LineChart></ResponsiveContainer>
 
-  function setAccountValue(id: string, value: number) {
-    setData((prev) =>
-      updateActiveWorkspace(prev, (w) => ({
-        ...w,
-        netWorthAccounts: w.netWorthAccounts.map((a) =>
-          a.id === id ? { ...a, values: { ...a.values, [monthId]: value } } : a,
-        ),
-      })),
-    )
-  }
-
-  function autoCategorize() {
-    setData((prev) =>
-      updateActiveWorkspace(prev, (w) => ({
-        ...w,
-        netWorthAccounts: w.netWorthAccounts.map((a) => ({
-          ...a,
-          category: guessNetWorthCategory(a, w.netWorthCategories) ?? a.category,
-        })),
-      })),
-    )
-  }
-
-  return (
-    <div>
-      <div className="page-header">
-        <h2 style={{ margin: 0 }}>Net Worth</h2>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button className="btn secondary small" onClick={autoCategorize} title="Re-suggest categories for all accounts based on their names">
-            ✨ Auto-categorize
-          </button>
-          <div className="field" style={{ minWidth: 180 }}>
-            <input type="month" value={monthId} onChange={(e) => setMonthId(e.target.value)} />
-          </div>
-        </div>
-      </div>
-
-      <div className="stat-grid">
-        <div className="stat-card">
-          <div className="label">Total Assets</div>
-          <div className="value positive">{fmt(totalAssets)}</div>
-        </div>
-        <div className="stat-card">
-          <div className="label">Total Liabilities</div>
-          <div className="value negative">{fmt(totalLiabilities)}</div>
-        </div>
-        <div className="stat-card">
-          <div className="label">Net Worth</div>
-          <div className={`value ${netWorth >= 0 ? 'positive' : 'negative'}`}>
-            {fmt(netWorth)}
-          </div>
-        </div>
-        <div className="stat-card">
-          <div className="label">Liquid Net Worth</div>
-          <div className={`value ${liquid >= 0 ? 'positive' : 'negative'}`}>
-            {fmt(liquid)}
-          </div>
-          <div className="sub">Cash &amp; liquid investments minus liabilities</div>
-        </div>
-        <div className="stat-card">
-          <div className="label">Change vs Previous Month</div>
-          {change !== undefined ? (
-            <div className={`value ${change >= 0 ? 'positive' : 'negative'}`}>
-              {change >= 0 ? '+' : ''}
-              {fmt(change)}
-              {changePct !== undefined && (
-                <span className="sub" style={{ marginLeft: 6, fontWeight: 700 }}>
-                  ({change >= 0 ? '+' : ''}
-                  {changePct.toFixed(1)}%)
-                </span>
-              )}
-            </div>
-          ) : (
-            <div className="value">—</div>
-          )}
-        </div>
-      </div>
-
-      {history.length > 1 && (
-        <div className="panel">
-          <div className="panel-header">
-            <h2>Net Worth Over Time</h2>
-          </div>
-          <div style={{ width: '100%', height: 260 }}>
-            <ResponsiveContainer>
-              <LineChart data={history}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis dataKey="label" stroke="var(--text-muted)" fontSize={12} />
-                <YAxis stroke="var(--text-muted)" fontSize={12} />
-                <Tooltip
-                  formatter={(value: number) => fmt(value)}
-                  contentStyle={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 8 }}
-                />
-                <Line type="monotone" dataKey="netWorth" name="Net Worth" stroke="#ff5a36" strokeWidth={2} dot={{ r: 3 }} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
-
-      <div className="panel panel-assets">
-        <div className="panel-header">
-          <h2>Assets</h2>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn ghost small" onClick={() => setManagingCategories('asset')}>
-              ⚙ Categories
-            </button>
-            <button className="btn secondary small" onClick={() => addAccount('asset')}>
-              + Add Asset
-            </button>
-          </div>
-        </div>
-        {assetGroups.length === 0 && ungroupedAssets.length === 0 ? (
-          <div className="empty-state">None added yet.</div>
-        ) : (
-          <div className="category-cards">
-            {assetGroups.map((group) => (
-              <CategoryCard
-                key={group.category.id}
-                group={group}
-                allCategories={ws.netWorthCategories.filter((c) => c.type === 'asset')}
-                monthId={monthId}
-                prevMonthId={prevMonthId}
-                currency={curr}
-                onUpdate={updateAccount}
-                onSetValue={setAccountValue}
-                onRemove={removeAccount}
-                onAdd={() => addAccount('asset', group.category.id)}
-              />
-            ))}
-            {ungroupedAssets.map((account) => (
-              <StandaloneCard
-                key={account.id}
-                account={account}
-                allCategories={ws.netWorthCategories.filter((c) => c.type === 'asset')}
-                monthId={monthId}
-                currency={curr}
-                onUpdate={updateAccount}
-                onSetValue={setAccountValue}
-                onRemove={removeAccount}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="panel panel-liabilities">
-        <div className="panel-header">
-          <h2>Liabilities</h2>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn ghost small" onClick={() => setManagingCategories('liability')}>
-              ⚙ Categories
-            </button>
-            <button className="btn secondary small" onClick={() => addAccount('liability')}>
-              + Add Liability
-            </button>
-          </div>
-        </div>
-        {liabilityGroups.length === 0 && ungroupedLiabilities.length === 0 ? (
-          <div className="empty-state">None added yet.</div>
-        ) : (
-          <div className="category-cards">
-            {liabilityGroups.map((group) => (
-              <CategoryCard
-                key={group.category.id}
-                group={group}
-                allCategories={ws.netWorthCategories.filter((c) => c.type === 'liability')}
-                monthId={monthId}
-                prevMonthId={prevMonthId}
-                currency={curr}
-                onUpdate={updateAccount}
-                onSetValue={setAccountValue}
-                onRemove={removeAccount}
-                onAdd={() => addAccount('liability', group.category.id)}
-              />
-            ))}
-            {ungroupedLiabilities.map((account) => (
-              <StandaloneCard
-                key={account.id}
-                account={account}
-                allCategories={ws.netWorthCategories.filter((c) => c.type === 'liability')}
-                monthId={monthId}
-                currency={curr}
-                onUpdate={updateAccount}
-                onSetValue={setAccountValue}
-                onRemove={removeAccount}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="panel">
-        <div className="panel-header">
-          <h2>Breakdown by Category</h2>
-          <p>How your net worth is split across categories this month.</p>
-        </div>
-        <CategoryBreakdown assetGroups={assetGroups} liabilityGroups={liabilityGroups} currency={curr} />
-      </div>
-
-      {managingCategories && (
-        <NetWorthCategoryModal
-          ws={ws}
-          type={managingCategories}
-          setData={setData}
-          onClose={() => setManagingCategories(null)}
-        />
-      )}
-    </div>
-  )
-}
-
-function CategoryCard({
-  group,
-  allCategories,
-  monthId,
-  prevMonthId,
-  currency,
-  onUpdate,
-  onSetValue,
-  onRemove,
-  onAdd,
-}: {
-  group: NetWorthCategoryGroup
-  allCategories: { id: string; name: string }[]
-  monthId: string
-  prevMonthId: string | undefined
-  currency: string
-  onUpdate: (id: string, updates: { name?: string; category?: string; notes?: string }) => void
-  onSetValue: (id: string, value: number) => void
-  onRemove: (id: string) => void
-  onAdd: () => void
-}) {
-  const { fmt, curr } = useCurrency()
-  const color = group.category.color
-  const prevTotal =
-    prevMonthId !== undefined
-      ? group.accounts.reduce((s, a) => s + accountValueAt(a, prevMonthId), 0)
-      : undefined
-  const diff = prevTotal !== undefined ? group.total - prevTotal : undefined
-
-  return (
-    <div className="category-card" style={{ borderTopColor: color }}>
-      <div className="category-card-header">
-        <span className="tag" style={{ background: `${color}22`, color }}>
-          <span className="dot" style={{ background: color }} />
-          {group.category.name}
-          {group.category.liquid && <span className="liquid-badge" title="Counts toward liquid net worth">💧</span>}
-        </span>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-          <div style={{ textAlign: 'right' }}>
-            <div className="category-card-total">{fmt(group.total)}</div>
-            {diff !== undefined && diff !== 0 && (
-              <div className={`category-card-diff ${diff >= 0 ? 'positive' : 'negative'}`}>
-                {diff >= 0 ? '▲' : '▼'} {fmt(Math.abs(diff))} vs last month
-              </div>
-            )}
-          </div>
-          <button className="btn ghost small category-card-add" onClick={onAdd} title={`Add to ${group.category.name}`}>
-            +
-          </button>
-        </div>
-      </div>
-      <div className="category-card-rows">
-        {group.accounts.map((a) => {
-          const value = accountValueAt(a, monthId)
-          const prevValue = prevMonthId !== undefined ? accountValueAt(a, prevMonthId) : undefined
-          const accDiff = prevValue !== undefined ? value - prevValue : undefined
-          const accPct = accDiff !== undefined && prevValue ? (accDiff / Math.abs(prevValue)) * 100 : undefined
-          return (
-            <div className="category-card-row" key={a.id}>
-              <div className="category-card-row-top">
-                <input
-                  type="text"
-                  className="table-input account-name-input"
-                  value={a.name}
-                  title={a.name}
-                  onChange={(e) => onUpdate(a.id, { name: e.target.value })}
-                />
-                <button className="btn ghost small" onClick={() => onRemove(a.id)}>
-                  ✕
-                </button>
-              </div>
-              <input
-                type="text"
-                className="table-input"
-                value={a.notes ?? ''}
-                placeholder="Description (optional)…"
-                onChange={(e) => onUpdate(a.id, { notes: e.target.value })}
-                style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4, width: '100%' }}
-              />
-              <div className="category-card-row-bottom">
-                <select
-                  className="table-input"
-                  value={a.category}
-                  onChange={(e) => onUpdate(a.id, { category: e.target.value })}
-                >
-                  {allCategories.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  type="number"
-                  step="0.01"
-                  className="table-input amount-input"
-                  value={value}
-                  onChange={(e) => onSetValue(a.id, parseFloat(e.target.value) || 0)}
-                />
-              </div>
-              {accDiff !== undefined && accDiff !== 0 && (
-                <div className={`account-diff ${accDiff >= 0 ? 'positive' : 'negative'}`}>
-                  {accDiff >= 0 ? '▲' : '▼'} {fmt(Math.abs(accDiff))}
-                  {accPct !== undefined && ` (${accDiff >= 0 ? '+' : '-'}${Math.abs(accPct).toFixed(1)}%)`}
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-function StandaloneCard({
-  account,
-  allCategories,
-  monthId,
-  currency,
-  onUpdate,
-  onSetValue,
-  onRemove,
-}: {
-  account: NetWorthAccount
-  allCategories: { id: string; name: string }[]
-  monthId: string
-  currency: string
-  onUpdate: (id: string, updates: { name?: string; category?: string; notes?: string }) => void
-  onSetValue: (id: string, value: number) => void
-  onRemove: (id: string) => void
-}) {
-  const { fmt, curr } = useCurrency()
-  const value = accountValueAt(account, monthId)
-  return (
-    <div className={`standalone-card type-${account.type}`}>
-      <div className="standalone-card-header">
-        <span className="standalone-card-badge">New {account.type === 'asset' ? 'Asset' : 'Liability'}</span>
-        <div style={{ textAlign: 'right' }}>
-          <div className="category-card-total">{fmt(value)}</div>
-        </div>
-      </div>
-      <div className="standalone-card-rows">
-        <div className="category-card-row-top">
-          <input
-            type="text"
-            className="table-input account-name-input"
-            value={account.name}
-            title={account.name}
-            onChange={(e) => onUpdate(account.id, { name: e.target.value })}
-          />
-          <button className="btn ghost small" onClick={() => onRemove(account.id)}>
-            ✕
-          </button>
-        </div>
-        <input
-          type="text"
-          className="table-input"
-          value={account.notes ?? ''}
-          placeholder="Description (optional)…"
-          onChange={(e) => onUpdate(account.id, { notes: e.target.value })}
-          style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4, width: '100%' }}
-        />
-        <div className="category-card-row-bottom">
-          <select
-            className="table-input"
-            value=""
-            onChange={(e) => onUpdate(account.id, { category: e.target.value })}
-          >
-            <option value="" disabled>
-              Choose category…
-            </option>
-            {allCategories.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-          <input
-            type="number"
-            step="0.01"
-            className="table-input amount-input"
-            value={value}
-            onChange={(e) => onSetValue(account.id, parseFloat(e.target.value) || 0)}
-          />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function CategoryBreakdown({
-  assetGroups,
-  liabilityGroups,
-  currency,
-}: {
-  assetGroups: NetWorthCategoryGroup[]
-  liabilityGroups: NetWorthCategoryGroup[]
-  currency: string
-}) {
-  if (assetGroups.length === 0 && liabilityGroups.length === 0) {
-    return <div className="empty-state">No accounts yet.</div>
-  }
-
-  const assetTotal = assetGroups.reduce((s, g) => s + g.total, 0)
-  const liabilityTotal = liabilityGroups.reduce((s, g) => s + g.total, 0)
-
-  const { fmt, curr } = useCurrency()
-
-  return (
-    <div className="breakdown-grid">
-      <BreakdownSection
-        title="Assets"
-        groups={assetGroups}
-        total={assetTotal}
-        currency={currency}
-        className="assets"
-      />
-      <BreakdownSection
-        title="Liabilities"
-        groups={liabilityGroups}
-        total={liabilityTotal}
-        currency={currency}
-        className="liabilities"
-      />
-    </div>
-  )
-}
-
-function BreakdownSection({
-  title,
-  groups,
-  total,
-  currency,
-  className,
-}: {
-  title: string
-  groups: NetWorthCategoryGroup[]
-  total: number
-  currency: string
-  className: string
-}) {
-  const { fmt, curr } = useCurrency()
-  return (
-    <div className={`breakdown-section ${className}`}>
-      <div className="breakdown-section-header">
-        <h3>{title}</h3>
-        <span className="total">{fmt(total)}</span>
-      </div>
-      {groups.length === 0 ? (
-        <div className="empty-state">None added yet.</div>
-      ) : (
-        <div className="breakdown-list">
-          {groups.map((group) => {
-            const color = group.category.color
-            const pct = total !== 0 ? (group.total / total) * 100 : 0
-            return (
-              <div className="breakdown-row" key={group.category.id}>
-                <div className="breakdown-row-top">
-                  <span className="tag" style={{ background: `${color}22`, color }}>
-                    <span className="dot" style={{ background: color }} />
-                    {group.category.name}
-                    {group.category.liquid && (
-                      <span className="liquid-badge" title="Counts toward liquid net worth">
-                        💧
-                      </span>
-                    )}
-                  </span>
-                  <span className="amount">{fmt(group.total)}</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div className="breakdown-bar">
-                    <div
-                      className="breakdown-bar-fill"
-                      style={{ width: `${Math.max(0, Math.min(100, Math.abs(pct)))}%`, background: color }}
-                    />
-                  </div>
-                  <span className="pct">{pct.toFixed(1)}%</span>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
-    </div>
-  )
+  return <div className="wealth-page">
+    <div className="wealth-toolbar"><div><span className="wealth-eyebrow">YOUR FINANCIAL PICTURE</span><p>What you own, what you owe, and how it changes.</p></div><label>Snapshot month<input aria-label="Snapshot month" type="month" required value={monthId} onChange={e => { if (/^\d{4}-\d{2}$/.test(e.target.value)) setMonthId(e.target.value) }} /></label></div>
+    <section className="wealth-hero">
+      <div className="wealth-headline"><span>Net worth · {monthLabel(monthId)}</span><strong>{fmt(net)}</strong><div className={`wealth-change ${change !== undefined && change < 0 ? 'down' : ''}`}>{change === undefined ? 'Your first snapshot' : `${change >= 0 ? '+' : ''}${fmt(change)} since ${monthLabel(previous)}`}</div><p>Assets minus liabilities</p></div>
+      <div className="wealth-summary"><div><span>Assets</span><strong>{fmt(assets)}</strong><small>Everything you own</small></div><div><span>Liabilities</span><strong>{fmt(debts)}</strong><small>Everything you owe</small></div><div><span>Liquid net worth</span><strong>{fmt(liquid)}</strong><small>Cash and liquid investments, minus debt</small></div></div>
+    </section>
+    <nav className="wealth-tabs" aria-label="Net worth views">{(['accounts','allocation','history'] as const).map(t => <button key={t} aria-pressed={tab === t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>{t === 'accounts' ? 'Accounts & balances' : t === 'allocation' ? 'Asset allocation' : 'History'}</button>)}</nav>
+    {tab === 'accounts' && <section className="wealth-register">
+      <div className="wealth-register-head"><div className="wealth-kind"><button className={kind === 'asset' ? 'active' : ''} onClick={() => setKind('asset')}>Assets <span>{accounts.filter(a=>a.type==='asset').length}</span></button><button className={kind === 'liability' ? 'active' : ''} onClick={() => setKind('liability')}>Liabilities <span>{accounts.filter(a=>a.type==='liability').length}</span></button></div><div className="wealth-actions"><button className="btn ghost small" onClick={() => setManaging(kind)}>Manage categories</button><button className="btn accent small" onClick={() => edit()}>+ Add {kind === 'asset' ? 'asset' : 'liability'}</button></div></div>
+      <div className="wealth-search"><input aria-label="Search accounts" placeholder="Search accounts…" value={search} onChange={e=>setSearch(e.target.value)}/><span>Balances for {monthLabel(monthId)}</span></div>
+      <div className="wealth-column-head"><span>Account</span><span>Change{previous ? ` vs ${monthLabel(previous)}` : ''}</span><span>Balance</span><span/></div>
+      {groups.map(g => <div className="wealth-group" key={g.id} style={{ '--group-color': g.color } as React.CSSProperties}>
+        <div className="wealth-group-head"><button aria-expanded={!collapsed.has(g.id)} onClick={() => setCollapsed(old => { const next = new Set(old); next.has(g.id) ? next.delete(g.id) : next.add(g.id); return next })}><span className="wealth-dot" style={{background:g.color}}/>{g.name}<small>{g.accounts.length} {g.accounts.length === 1 ? 'account' : 'accounts'}</small><span className="wealth-chevron">{collapsed.has(g.id) ? '▸' : '▾'}</span></button>{g.liquid && <span className="wealth-liquid">Liquid</span>}<strong>{fmt(g.accounts.reduce((s,a)=>s+accountValueAt(a,monthId),0))}</strong></div>
+        {!collapsed.has(g.id) && g.accounts.map(a => { const value = accountValueAt(a,monthId); const delta = previous ? value-accountValueAt(a,previous) : undefined; return <div className="wealth-account" key={a.id}><div className="wealth-account-name"><strong>{a.name}</strong>{a.notes && <small>{a.notes}</small>}</div><span className={`wealth-delta ${delta && (a.type === 'asset' ? delta > 0 : delta < 0) ? 'positive' : delta ? 'negative' : ''}`}>{delta ? `${delta>0?'+':''}${fmt(delta)}` : '—'}</span><button className="wealth-balance" title={`Edit ${a.name} balance`} onClick={()=>edit(a)}>{fmt(value)}</button><button className="btn ghost small" aria-label={`Edit ${a.name}`} onClick={()=>edit(a)}>Edit</button></div> })}
+      </div>)}
+      {!groups.length && <div className="empty-state">{search ? 'No accounts match your search.' : kind === 'liability' ? 'No liabilities recorded.' : 'Add your first asset to start tracking your net worth.'}</div>}
+      <div className="wealth-total"><span>Total {kind === 'asset' ? 'assets' : 'liabilities'}{search ? ' · filtered' : ''}</span><strong>{fmt(visible.reduce((s,a)=>s+accountValueAt(a,monthId),0))}</strong></div>
+      <p className="wealth-footnote">Click a balance or Edit to update an account. The latest recorded balance carries forward until you enter a new one.</p>
+    </section>}
+    {tab === 'allocation' && <section className="wealth-register wealth-allocation"><h2>Where your assets are held</h2><p className="drive-muted">Share of {fmt(assets)} in assets · {monthLabel(monthId)}</p>{allocation.filter(c=>c.value!==0).map(c=><div className="wealth-allocation-row" key={c.id}><div><span><i className="wealth-dot" style={{background:c.color}}/>{c.name}</span><strong>{fmt(c.value)} <small>{assets > 0 ? `${(c.value/assets*100).toFixed(1)}%` : '—'}</small></strong></div><div className="wealth-bar"><span style={{width:`${assets>0?Math.max(0,Math.min(100,c.value/assets*100)):0}%`,background:c.color}}/></div></div>)}{!assets && <div className="empty-state">Add asset balances to see your allocation.</div>}</section>}
+    {tab === 'history' && <section className="wealth-register wealth-history"><h2>Your net worth over time</h2><p className="drive-muted">Recorded monthly snapshots across all accounts.</p>{history.length>1 ? <div className="wealth-chart">{chart}</div> : <div className="empty-state">Record balances in another month to see your trend.</div>}</section>}
+    {draft && <div className="modal-backdrop" onClick={()=>setDraft(null)}><form className="wealth-editor" role="dialog" aria-modal="true" aria-labelledby="wealth-editor-title" onClick={e=>e.stopPropagation()} onSubmit={save} onKeyDown={e=>{if(e.key==='Escape')setDraft(null)}}><div className="wealth-editor-heading"><div><h2 id="wealth-editor-title">{draft.isNew?'Add':'Edit'} {draft.type === 'asset'?'asset':'liability'}</h2><p>{monthLabel(monthId)} · amounts in {ws.currency}</p></div><button type="button" className="btn ghost small" aria-label="Close editor" onClick={()=>setDraft(null)}>✕</button></div><label>Account name<input autoFocus required value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})} placeholder="e.g. Savings account"/></label><div className="wealth-editor-grid"><label>Category<select value={draft.category} onChange={e=>setDraft({...draft,category:e.target.value})}><option value="">Uncategorised</option>{ws.netWorthCategories.filter(c=>c.type===draft.type).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label><label>Balance ({ws.currency})<input required type="number" min="0" step="0.01" value={draft.balance} onChange={e=>setDraft({...draft,balance:e.target.value})}/></label></div><label>Notes <span className="drive-muted">(optional)</span><input value={draft.notes} onChange={e=>setDraft({...draft,notes:e.target.value})} placeholder="Add a short note"/></label><div className="wealth-editor-actions">{!draft.isNew && <button type="button" className="btn ghost small danger" onClick={remove}>Remove account</button>}<button type="button" className="btn secondary" onClick={()=>setDraft(null)}>Cancel</button><button className="btn accent" type="submit">Save changes</button></div></form></div>}
+    {managing && <NetWorthCategoryModal ws={ws} type={managing} setData={setData} onClose={()=>setManaging(null)}/>}
+  </div>
 }

@@ -4,6 +4,15 @@ import type { View } from '../App'
 import { monthLabel, shiftMonth, sortedMonthIds, currentMonthId, workspaceOrder } from '../storage'
 import AddMonthModal from './AddMonthModal'
 
+function HideIcon() {
+  return <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 3l18 18M10.6 10.6a2 2 0 002.8 2.8M9.8 4.3A11 11 0 0112 4c6 0 10 8 10 8a18 18 0 01-3.1 4M6.2 6.2A19 19 0 002 12s4 8 10 8a10 10 0 005.8-1.8" /></svg>
+}
+
+function SidebarLabel({ label, month = false }: { label: string; month?: boolean }) {
+  const split = label.indexOf(' ')
+  return <><span className="sidebar-item-icon" aria-hidden="true">{month ? '🗓️' : label.slice(0, split)}</span><span className="sidebar-item-label">{month ? label : label.slice(split + 1)}</span></>
+}
+
 const WORKSPACE_ICONS = [
   '🏢', '🏥', '💊', '🌿', '💼', '🛒', '🎯', '🚀', '💡', '🎨',
   '🏪', '🏬', '🏦', '🧬', '🌐', '⚡', '🔬', '🛡️', '🎓', '🌟',
@@ -15,6 +24,7 @@ interface Props {
   ws: WorkspaceData
   view: View
   setView: (v: View) => void
+  onSetSidebarHidden: (id: string, hidden: boolean) => void
   onAddMonth: (id: string, copyFromPrev: boolean) => void
   onOpenSettings: () => void
   onSetWorkspace: (w: Workspace) => void
@@ -33,6 +43,7 @@ export default function Sidebar({
   ws,
   view,
   setView,
+  onSetSidebarHidden,
   onAddMonth,
   onOpenSettings,
   onSetWorkspace,
@@ -45,6 +56,25 @@ export default function Sidebar({
   lastSaved,
   saveFailed,
 }: Props) {
+  const [customizing, setCustomizing] = useState(false)
+  const isNavHidden = (id: string) => (ws.hiddenSidebarItems ?? []).includes(id) || (id === 'invoices' && !!ws.hideInvoices) || (id === 'contracts' && !!ws.hideContracts)
+  const navItems: { id: string; label: string; section: string; view: View }[] = [
+    { id: 'overview', label: '📊 Overview', section: 'General', view: { type: 'overview' } },
+    ...(ws.kind === 'personal' ? [{ id: 'networth', label: '🏦 Net Worth', section: 'General', view: { type: 'networth' as const } }] : []),
+    ...(ws.kind === 'business' ? [
+      { id: 'invoices', label: '🧾 Invoices', section: 'Finance', view: { type: 'invoices' as const } },
+      { id: 'contracts', label: '📄 Contracts', section: 'Finance', view: { type: 'contracts' as const } },
+    ] : []),
+    { id: 'subscriptions', label: '🔁 Subscriptions', section: 'Finance', view: { type: 'subscriptions' } },
+    { id: 'budget', label: '💸 Fixed Costs', section: 'Finance', view: { type: 'budget' } },
+    ...(ws.kind === 'business' ? ([
+      ['adspend', '📣 Ad Spend', 'Marketing'], ['influencers', '🤝 Influencers', 'Marketing'],
+      ['model', '📐 Financial Model', 'Business'], ['funding', '💰 Funding', 'Business'],
+      ['retail', '🏪 Retail', 'Business'], ['inventory', '📦 Inventory', 'Business'],
+      ['startup', '🚀 Startup Costs', 'Business'], ['tools', '🔧 Business Tools', 'Business'],
+    ] as const).map(([id, label, section]) => ({ id, label, section, view: { type: id } })) : []),
+    ...sortedMonthIds(ws.months).slice().reverse().map((id) => ({ id: `month:${id}`, label: monthLabel(id), section: 'Months', view: { type: 'month' as const, id } })),
+  ]
   const [addOpen, setAddOpen] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
@@ -169,7 +199,7 @@ export default function Sidebar({
                       onSetWorkspaceHidden(id, true)
                     }}
                   >
-                    🙈
+                    <HideIcon />
                   </span>
                 )}
                 {w.kind === 'business' && active && (
@@ -217,7 +247,7 @@ export default function Sidebar({
               style={{ fontSize: 12 }}
               onClick={() => setShowHidden((v) => !v)}
             >
-              <span className="workspace-icon">🙈</span>
+              <span className="workspace-icon"><HideIcon /></span>
               <span className="workspace-name">{showHidden ? 'Hide' : 'Show'} hidden ({hiddenOrder.length})</span>
             </button>
             {showHidden && hiddenOrder.map((id) => {
@@ -239,135 +269,32 @@ export default function Sidebar({
           </>
         )}
       </div>
-      <p className="workspace-hint">Double-click to rename · drag to reorder · 🙈 to hide.</p>
+      <p className="workspace-hint">Double-click to rename · drag to reorder.</p>
 
       <div className="sidebar-nav">
-      <div className="nav-section-label">General</div>
-      <button
-        className={`nav-item ${view.type === 'overview' ? 'active' : ''}`}
-        onClick={() => setView({ type: 'overview' })}
-      >
-        <span>📊 Overview</span>
-      </button>
-      {ws.kind === 'personal' && (
-        <button
-          className={`nav-item ${view.type === 'networth' ? 'active' : ''}`}
-          onClick={() => setView({ type: 'networth' })}
-        >
-          <span>🏦 Net Worth</span>
-        </button>
-      )}
-
-      <div className="nav-section-label">Finance</div>
-      {ws.kind === 'business' && (
-        <button
-          className={`nav-item ${view.type === 'invoices' ? 'active' : ''}`}
-          onClick={() => setView({ type: 'invoices' })}
-        >
-          <span>🧾 Invoices</span>
-        </button>
-      )}
-      <button
-        className={`nav-item ${view.type === 'subscriptions' ? 'active' : ''}`}
-        onClick={() => setView({ type: 'subscriptions' })}
-      >
-        <span>🔁 Subscriptions</span>
-      </button>
-      <button
-        className={`nav-item ${view.type === 'budget' ? 'active' : ''}`}
-        onClick={() => setView({ type: 'budget' })}
-      >
-        <span>💸 Fixed Costs</span>
-      </button>
-
-      {ws.kind === 'business' && (
-        <>
-          <div className="nav-section-label">Marketing</div>
-          <button
-            className={`nav-item ${view.type === 'adspend' ? 'active' : ''}`}
-            onClick={() => setView({ type: 'adspend' })}
-          >
-            <span>📣 Ad Spend</span>
-          </button>
-          <button
-            className={`nav-item ${view.type === 'influencers' ? 'active' : ''}`}
-            onClick={() => setView({ type: 'influencers' })}
-          >
-            <span>🤝 Influencers</span>
-          </button>
-
-          <div className="nav-section-label">Business</div>
-          <button
-            className={`nav-item ${view.type === 'model' ? 'active' : ''}`}
-            onClick={() => setView({ type: 'model' })}
-          >
-            <span>📐 Financial Model</span>
-          </button>
-          <button
-            className={`nav-item ${view.type === 'funding' ? 'active' : ''}`}
-            onClick={() => setView({ type: 'funding' })}
-          >
-            <span>💰 Funding</span>
-          </button>
-          <button
-            className={`nav-item ${view.type === 'retail' ? 'active' : ''}`}
-            onClick={() => setView({ type: 'retail' })}
-          >
-            <span>🏪 Retail</span>
-          </button>
-          <button
-            className={`nav-item ${view.type === 'inventory' ? 'active' : ''}`}
-            onClick={() => setView({ type: 'inventory' })}
-          >
-            <span>📦 Inventory</span>
-          </button>
-          <button
-            className={`nav-item ${view.type === 'startup' ? 'active' : ''}`}
-            onClick={() => setView({ type: 'startup' })}
-          >
-            <span>🚀 Startup Costs</span>
-          </button>
-          <button
-            className={`nav-item ${view.type === 'tools' ? 'active' : ''}`}
-            onClick={() => setView({ type: 'tools' })}
-          >
-            <span>🔧 Business Tools</span>
-          </button>
-          <button
-            className={`nav-item ${view.type === 'contracts' ? 'active' : ''}`}
-            onClick={() => setView({ type: 'contracts' })}
-          >
-            <span>📄 Contracts</span>
-          </button>
-        </>
-      )}
-
-      <div className="nav-section-label">Months</div>
-      <div className="nav-months">
-        {ids.map((id) => (
-          <button
-            key={id}
-            className={`nav-item ${view.type === 'month' && view.id === id ? 'active' : ''}`}
-            onClick={() => setView({ type: 'month', id })}
-          >
-            <span>{monthLabel(id)}</span>
-          </button>
-        ))}
-        {ids.length === 0 && (
-          <div className="empty-state" style={{ padding: '8px' }}>
-            No months yet
+        {['General', 'Finance', 'Marketing', 'Business', 'Months'].map((section) => {
+          const visible = navItems.filter((item) => item.section === section && !isNavHidden(item.id))
+          if (!visible.length) return null
+          return <div key={section}>
+            <div className="nav-section-label">{section}</div>
+            {visible.map((item) => <div className="sidebar-page-row" key={item.id}>
+              <button className={`nav-item ${view.type === item.view.type && (item.view.type !== 'month' || (view.type === 'month' && view.id === item.view.id)) ? 'active' : ''}`} onClick={() => setView(item.view)}><SidebarLabel label={item.label} month={item.view.type === 'month'} /></button>
+              <button className="sidebar-hide btn ghost small" aria-label={`Hide ${item.label} from sidebar`} title="Hide from sidebar" onClick={() => onSetSidebarHidden(item.id, true)}><HideIcon /></button>
+            </div>)}
           </div>
-        )}
+        })}
       </div>
-      </div>{/* end sidebar-nav */}
 
       <div className="sidebar-footer">
-        <button className="nav-item" onClick={() => setAddOpen(true)}>
+        <button className="nav-item" onClick={() => setCustomizing(true)}><span>☰ Customize sidebar</span></button>
+        {!isNavHidden('add-month') && <button className="nav-item" onClick={() => setAddOpen(true)}>
           <span>+ Add Month</span>
         </button>
-        <button className="nav-item" onClick={onOpenSettings}>
+        }
+        {!isNavHidden('settings') && <button className="nav-item" onClick={onOpenSettings}>
           <span>⚙️ Settings</span>
         </button>
+        }
         {saveFailed ? (
           <div className="saved-indicator" style={{ color: 'var(--red)', fontWeight: 700 }}>
             ⚠ Not saved to server — is it running?
@@ -380,6 +307,17 @@ export default function Sidebar({
         )}
       </div>
 
+      {customizing && <div className="modal-backdrop" onClick={() => setCustomizing(false)}>
+        <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <h2>Customize sidebar</h2><p className="drive-muted">Choose what appears in {ws.name}. Hiding an item keeps all its data.</p>
+          <div style={{ maxHeight: '55vh', overflowY: 'auto', display: 'grid', gap: 12 }}>
+            {[...navItems, { id: 'add-month', label: '+ Add Month' }, { id: 'settings', label: '⚙️ Settings' }].map((item) => <label key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <input type="checkbox" checked={!isNavHidden(item.id)} onChange={(e) => onSetSidebarHidden(item.id, !e.target.checked)} />{item.label}
+            </label>)}
+          </div>
+          <div className="modal-actions"><button className="btn accent" onClick={() => setCustomizing(false)}>Done</button></div>
+        </div>
+      </div>}
       {addOpen && (
         <AddMonthModal
           defaultMonth={ids.length ? shiftMonth(ids[0], 1) : currentMonthId()}

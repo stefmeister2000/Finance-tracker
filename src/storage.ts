@@ -1,3 +1,4 @@
+export { monthLabel, sortedMonthIds } from './months'
 import { v4 as uuid } from 'uuid'
 import type { AppData, MonthData, NetWorthCategoryDef, WorkspaceData } from './types'
 import { DEFAULT_NET_WORTH_CATEGORIES } from './types'
@@ -121,9 +122,19 @@ function migrateNetWorthCategories(ws: WorkspaceData): WorkspaceData {
     categories = defaultNetWorthCategories()
   }
 
-  // Add any newer default categories (e.g. Crypto, Stock Investments, Hard Assets,
-  // Business Valuations) that don't yet exist in older workspaces, so they show up
-  // as selectable options without disturbing already-categorized accounts.
+  const aliases: Record<string, string> = {"cash & bank": "Cash & bank accounts", "stock investments": "Stocks & funds", "crypto investments": "Cryptocurrency", "business valuations": "Business ownership", "real estate": "Property", "vehicle": "Vehicles", "hard assets": "Valuables & collectibles", "other asset": "Other assets", "credit card": "Credit card debt", "loan": "Loans & mortgages", "other liability": "Other debts", "investments": "Stocks & funds"}
+  const canonicalName = (name: string) => aliases[name.toLowerCase()] ?? name
+  const remappedIds = new Map<string, string>()
+  const normalized: NetWorthCategoryDef[] = []
+  for (const category of categories) {
+    const name = canonicalName(category.name)
+    // Merge legacy investment labels only when their accounting properties agree.
+    const duplicate = name === 'Stocks & funds' ? normalized.find(c => c.name === name && c.type === category.type && c.liquid === category.liquid) : undefined
+    if (duplicate) remappedIds.set(category.id, duplicate.id)
+    else normalized.push({ ...category, name })
+  }
+  categories = normalized
+
   const existingNames = new Set(categories.map((c) => c.name.toLowerCase()))
   for (const def of DEFAULT_NET_WORTH_CATEGORIES) {
     if (!existingNames.has(def.name.toLowerCase())) {
@@ -136,11 +147,13 @@ function migrateNetWorthCategories(ws: WorkspaceData): WorkspaceData {
   const byId = new Set(categories.map((c) => c.id))
 
   const netWorthAccounts = (ws.netWorthAccounts ?? []).map((acc) => {
+    const mappedId = remappedIds.get(acc.category)
+    if (mappedId) return { ...acc, category: mappedId }
     if (byId.has(acc.category)) return acc
     // category is an old plain name (or unknown) - remap to an id
-    let match = byName.get(String(acc.category).toLowerCase())
+    let match = byName.get(canonicalName(String(acc.category)).toLowerCase())
     if (!match) {
-      const fallbackName = acc.type === 'asset' ? 'Other Asset' : 'Other Liability'
+      const fallbackName = acc.type === 'asset' ? 'Other assets' : 'Other debts'
       match = byName.get(fallbackName.toLowerCase())
       if (!match) {
         const def = DEFAULT_NET_WORTH_CATEGORIES.find((c) => c.name === fallbackName)!
@@ -349,12 +362,6 @@ export function flushDataBeacon(data: AppData): void {
   }
 }
 
-export function monthLabel(id: string): string {
-  const [year, month] = id.split('-').map(Number)
-  const date = new Date(year, month - 1, 1)
-  return date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
-}
-
 export function currentMonthId(): string {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
@@ -364,10 +371,6 @@ export function shiftMonth(id: string, delta: number): string {
   const [year, month] = id.split('-').map(Number)
   const date = new Date(year, month - 1 + delta, 1)
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
-}
-
-export function sortedMonthIds(months: Record<string, MonthData>): string[] {
-  return Object.keys(months).sort()
 }
 
 export function activeWorkspace(data: AppData): WorkspaceData {

@@ -29,8 +29,22 @@ function DescriptionCell({ description }: { description: string }) {
 
 export default function SubscriptionsPage({ ws, setData }: Props) {
   const { fmt, curr } = useCurrency()
-  const subscriptions = detectSubscriptions(ws)
+  const subscriptions = detectSubscriptions(ws).filter((s) => s.flaggedRecurring)
   const manualSubs = ws.manualSubscriptions ?? []
+  const [search, setSearch] = useState('')
+  const [account, setAccount] = useState('')
+  const [reviewOnly, setReviewOnly] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const [name, setName] = useState('')
+  const [cost, setCost] = useState('')
+  const [newCategory, setNewCategory] = useState(ws.categories.find(c => c.type === 'expense')?.id ?? '')
+  const [newCard, setNewCard] = useState(ws.cards[0]?.id ?? '')
+  const flagged = new Set(ws.flaggedSubscriptions ?? [])
+  const matches = (description: string, cardId: string, key: string) =>
+    cleanDescription(description).toLowerCase().includes(search.trim().toLowerCase()) &&
+    (!account || cardId === account) && (!reviewOnly || flagged.has(key))
+  const visibleManual = manualSubs.filter(s => matches(s.description, s.cardId, `manual-${s.id}`))
+  const visibleLinked = subscriptions.filter(s => matches(s.description, s.cardId, s.key))
 
   const monthlyTotal =
     subscriptions.filter((s) => s.flaggedRecurring).reduce((s, sub) => s + sub.monthlyEstimate, 0) +
@@ -52,26 +66,6 @@ export default function SubscriptionsPage({ ws, setData }: Props) {
     .map(([id, monthly]) => ({ category: categoryById.get(id), monthly }))
     .filter((e) => e.category)
     .sort((a, b) => b.monthly - a.monthly) as { category: NonNullable<ReturnType<typeof categoryById.get>>; monthly: number }[]
-
-  function setRecurring(key: string, recurring: boolean) {
-    setData((prev) =>
-      updateActiveWorkspace(prev, (w) => ({
-        ...w,
-        months: Object.fromEntries(
-          Object.entries(w.months).map(([id, month]) => [
-            id,
-            {
-              ...month,
-              transactions: month.transactions.map((t) => {
-                const tKey = `${normalizeDescription(t.description)}|${t.cardId}`
-                return tKey === key ? { ...t, recurring } : t
-              }),
-            },
-          ]),
-        ),
-      })),
-    )
-  }
 
   function ignoreSubscription(key: string) {
     setData((prev) =>
@@ -108,6 +102,7 @@ export default function SubscriptionsPage({ ws, setData }: Props) {
   }
 
   function addManualSubscription() {
+    if (!name.trim() || !cost.trim() || !Number.isFinite(Number(cost)) || Number(cost) < 0) return
     setData((prev) =>
       updateActiveWorkspace(prev, (w) => ({
         ...w,
@@ -115,14 +110,17 @@ export default function SubscriptionsPage({ ws, setData }: Props) {
           ...(w.manualSubscriptions ?? []),
           {
             id: uuid(),
-            description: 'New Subscription',
-            categoryId: w.categories.find((c) => c.type === 'expense')?.id ?? '',
-            cardId: w.cards[0]?.id ?? '',
-            monthlyCost: 0,
+            description: name.trim(),
+            categoryId: newCategory,
+            cardId: newCard,
+            monthlyCost: Number(cost),
           },
         ],
       })),
     )
+    setAdding(false)
+    setName('')
+    setCost('')
   }
 
   function updateManualSubscription(id: string, updates: Partial<ManualSubscription>) {
@@ -155,31 +153,68 @@ export default function SubscriptionsPage({ ws, setData }: Props) {
   }
 
   return (
-    <div>
+    <div className="subscriptions-page">
       <div className="page-header">
         <h2 style={{ margin: 0 }}>Subscriptions</h2>
       </div>
 
       <div className="stat-grid">
         <div className="stat-card">
-          <div className="label">Active Subscriptions</div>
+          <div className="label">Saved subscriptions</div>
           <div className="value">{subscriptions.filter((s) => s.flaggedRecurring).length + manualSubs.length}</div>
         </div>
         <div className="stat-card">
-          <div className="label">Estimated Monthly Cost</div>
+          <div className="label">Monthly total</div>
           <div className="value negative">{fmt(monthlyTotal)}</div>
         </div>
         <div className="stat-card">
-          <div className="label">Estimated Annual Cost</div>
+          <div className="label">Annual estimate</div>
           <div className="value negative">{fmt(annualTotal)}</div>
         </div>
       </div>
 
+
+      <div className="panel">
+        <div className="panel-header">
+          <h2>Your subscriptions <span className="drive-muted">({manualSubs.length + subscriptions.length})</span></h2>
+          <p>Only items you add or confirm. Click an amount to edit it.</p>
+          <button className="btn primary small" onClick={() => setAdding(!adding)}>
+            + Add Subscription
+          </button>
+        </div>
+        {adding && <form className="subscription-add" onSubmit={e => { e.preventDefault(); addManualSubscription() }}>
+          <label>Name<input autoFocus required value={name} placeholder="e.g. Spotify" onChange={e => setName(e.target.value)} /></label>
+          <label>Monthly cost<input required type="number" min="0" step="0.01" value={cost} placeholder="0.00" onChange={e => setCost(e.target.value)} /></label>
+          <label>Category<select value={newCategory} onChange={e => setNewCategory(e.target.value)}><option value="">Uncategorised</option>{ws.categories.filter(c => c.type === 'expense').map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+          <label>Account<select value={newCard} onChange={e => setNewCard(e.target.value)}><option value="">No account</option>{ws.cards.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+          <button className="btn primary" type="submit">Save subscription</button>
+          <button className="btn ghost" type="button" onClick={() => setAdding(false)}>Cancel</button>
+        </form>}
+        <div className="subscription-filters">
+          <input aria-label="Search subscriptions" placeholder="Search subscriptions…" value={search} onChange={e => setSearch(e.target.value)} />
+          <select aria-label="Filter by account" value={account} onChange={e => setAccount(e.target.value)}><option value="">All accounts</option>{ws.cards.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+          <button className={`btn ${reviewOnly ? 'secondary' : 'ghost'} small`} aria-pressed={reviewOnly} onClick={() => setReviewOnly(!reviewOnly)}>Needs review</button>
+          <span className="drive-muted">{visibleManual.length + visibleLinked.length} shown</span>
+        </div>
+        <UnifiedSubscriptionTable
+          manualSubs={visibleManual}
+          subscriptions={visibleLinked}
+          categories={ws.categories.filter((c) => c.type === 'expense')}
+          cards={ws.cards}
+          categoryById={categoryById}
+          cardById={cardById}
+          currency={curr}
+          onUpdateManual={updateManualSubscription}
+          onRemoveManual={removeManualSubscription}
+          onUnconfirm={(key) => ignoreSubscription(key)}
+          onSetPrice={setSubscriptionPrice}
+          flaggedKeys={new Set(ws.flaggedSubscriptions ?? [])}
+          onToggleFlag={toggleFlagSub}
+        />
+      </div>
       {categoryBreakdown.length > 0 && (
-        <div className="panel">
-          <div className="panel-header">
-            <h2>Breakdown by Category</h2>
-          </div>
+        <details className="panel subscription-breakdown">
+          <summary>Spending by category <span>View monthly and annual totals</span></summary>
           <div className="scroll-x">
             <table>
               <thead>
@@ -229,35 +264,9 @@ export default function SubscriptionsPage({ ws, setData }: Props) {
               </tfoot>
             </table>
           </div>
-        </div>
+        </details>
       )}
 
-      <div className="panel">
-        <div className="panel-header">
-          <h2>Subscriptions</h2>
-          <p>Your subscriptions, plus suggestions detected from your transactions — accept or dismiss each one.</p>
-          <button className="btn secondary small" onClick={addManualSubscription}>
-            + Add Subscription
-          </button>
-        </div>
-        <UnifiedSubscriptionTable
-          manualSubs={manualSubs}
-          subscriptions={subscriptions}
-          categories={ws.categories.filter((c) => c.type === 'expense')}
-          cards={ws.cards}
-          categoryById={categoryById}
-          cardById={cardById}
-          currency={curr}
-          onUpdateManual={updateManualSubscription}
-          onRemoveManual={removeManualSubscription}
-          onConfirm={(key) => setRecurring(key, true)}
-          onUnconfirm={(key) => ignoreSubscription(key)}
-          onDismiss={ignoreSubscription}
-          onSetPrice={setSubscriptionPrice}
-          flaggedKeys={new Set(ws.flaggedSubscriptions ?? [])}
-          onToggleFlag={toggleFlagSub}
-        />
-      </div>
     </div>
   )
 }
@@ -272,9 +281,7 @@ function UnifiedSubscriptionTable({
   currency,
   onUpdateManual,
   onRemoveManual,
-  onConfirm,
   onUnconfirm,
-  onDismiss,
   onSetPrice,
   flaggedKeys,
   onToggleFlag,
@@ -288,9 +295,7 @@ function UnifiedSubscriptionTable({
   currency: string
   onUpdateManual: (id: string, updates: Partial<ManualSubscription>) => void
   onRemoveManual: (id: string) => void
-  onConfirm: (key: string) => void
   onUnconfirm: (key: string) => void
-  onDismiss: (key: string) => void
   onSetPrice: (key: string, monthly: number | null) => void
   flaggedKeys: Set<string>
   onToggleFlag: (key: string) => void
@@ -298,18 +303,17 @@ function UnifiedSubscriptionTable({
   const flagBtn = (key: string) => {
     const on = flaggedKeys.has(key)
     return (
-      <button className="btn ghost small" title={on ? 'Unflag' : 'Flag to review later'}
+      <button className="btn ghost small" aria-pressed={on} title={on ? 'Mark as reviewed' : 'Mark for review'}
         onClick={() => onToggleFlag(key)} style={on ? { color: '#f59e0b', borderColor: '#f59e0b' } : undefined}>
-        {on ? '🚩' : '⚐'}
+        {on ? 'Review needed' : 'Review'}
       </button>
     )
   }
   const { fmt, curr } = useCurrency()
   const confirmed = subscriptions.filter((s) => s.flaggedRecurring)
-  const suggestions = subscriptions.filter((s) => !s.flaggedRecurring)
 
-  if (manualSubs.length === 0 && confirmed.length === 0 && suggestions.length === 0) {
-    return <div className="empty-state">Nothing here yet.</div>
+  if (manualSubs.length === 0 && confirmed.length === 0) {
+    return <div className="empty-state">No subscriptions to show. Add a subscription or adjust your filters.</div>
   }
 
   return (
@@ -317,12 +321,12 @@ function UnifiedSubscriptionTable({
       <table>
         <thead>
           <tr>
-            <th>Description</th>
+            <th>Subscription</th>
             <th>Category</th>
             <th>Account</th>
             <th style={{ textAlign: 'right' }}>Monthly</th>
             <th style={{ textAlign: 'right' }}>Annual</th>
-            <th>Subscription?</th>
+            <th style={{ textAlign: 'right' }}>Manage</th>
           </tr>
         </thead>
         <tbody>
@@ -360,9 +364,6 @@ function UnifiedSubscriptionTable({
                 </td>
                 <td className="amount negative">{fmt(s.monthlyCost * 12)}</td>
                 <td className="actions">
-                  <span className="tag" style={{ background: 'var(--green-soft, #16a34a22)', color: 'var(--green)' }}>
-                    ✓ Yes
-                  </span>
                   {flagBtn(mKey)}
                   <button className="btn ghost small" onClick={() => onRemoveManual(s.id)}>
                     Remove
@@ -389,9 +390,6 @@ function UnifiedSubscriptionTable({
                 </td>
                 <td className="amount negative">{fmt(s.annualEstimate)}</td>
                 <td className="actions">
-                  <span className="tag" style={{ background: 'var(--green-soft, #16a34a22)', color: 'var(--green)' }}>
-                    ✓ Yes
-                  </span>
                   {flagBtn(s.key)}
                   <button className="btn ghost small" onClick={() => onUnconfirm(s.key)}>
                     Remove
@@ -401,35 +399,7 @@ function UnifiedSubscriptionTable({
             )
           })}
 
-          {suggestions.map((s) => {
-            const cat = categoryById.get(s.categoryId)
-            const card = cardById.get(s.cardId)
-            return (
-              <tr key={`suggestion-${s.key}`}>
-                <td><DescriptionCell description={s.description} /></td>
-                <td>{cat && <CategoryTag category={cat} />}</td>
-                <td>{card?.name ?? '—'}</td>
-                <td className="amount negative">
-                  <EditableAmount
-                    value={s.monthlyEstimate}
-                    currency={currency}
-                    onChange={(value) => onSetPrice(s.key, value)}
-                  />
-                </td>
-                <td className="amount negative">{fmt(s.annualEstimate)}</td>
-                <td className="actions">
-                  <span style={{ marginRight: 6, color: 'var(--text-muted)' }}>Subscription?</span>
-                  <button className="btn secondary small" onClick={() => onConfirm(s.key)}>
-                    Yes
-                  </button>
-                  <button className="btn ghost small" onClick={() => onDismiss(s.key)}>
-                    No
-                  </button>
-                  {flagBtn(s.key)}
-                </td>
-              </tr>
-            )
-          })}
+
         </tbody>
       </table>
     </div>
@@ -454,6 +424,7 @@ function EditableAmount({
       <input
         type="number"
         step="0.01"
+        min="0"
         autoFocus
         className="table-input amount-input"
         style={{ maxWidth: 90 }}
@@ -461,7 +432,7 @@ function EditableAmount({
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => {
           const parsed = parseFloat(draft)
-          if (!isNaN(parsed)) onChange(parsed)
+          if (Number.isFinite(parsed) && parsed >= 0) onChange(parsed)
           setEditing(false)
         }}
         onKeyDown={(e) => {

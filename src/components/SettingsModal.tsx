@@ -206,6 +206,18 @@ export default function SettingsModal({ data, setData, onClose }: Props) {
               />
             </div>
             <div className="field" style={{ maxWidth: 200, marginTop: 16 }}>
+              {ws.kind === 'business' && <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 16 }}>
+                <input type="checkbox" checked={!ws.hideInvoices} onChange={(e) => {
+                  const show = e.target.checked
+                  setData((prev) => updateActiveWorkspace(prev, (w) => ({ ...w, hideInvoices: !show, hiddenSidebarItems: (w.hiddenSidebarItems ?? []).filter((id) => id !== 'invoices') })))
+                }} /> Show Invoices & files
+              </label>}
+              {ws.kind === 'business' && <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 16 }}>
+                <input type="checkbox" checked={!ws.hideContracts} onChange={(e) => {
+                  const show = e.target.checked
+                  setData((prev) => updateActiveWorkspace(prev, (w) => ({ ...w, hideContracts: !show, hiddenSidebarItems: (w.hiddenSidebarItems ?? []).filter((id) => id !== 'contracts') })))
+                }} /> Show Contracts
+              </label>}
               <label>Display Currency</label>
               <select
                 value={displayCurrency}

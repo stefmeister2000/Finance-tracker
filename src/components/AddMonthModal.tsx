@@ -1,3 +1,4 @@
+import { isMonthId } from '../months'
 import { useState } from 'react'
 
 interface Props {
@@ -34,7 +35,7 @@ export default function AddMonthModal({ defaultMonth, existing, hasPrevious, onC
           <button className="btn secondary" onClick={onClose}>
             Cancel
           </button>
-          <button className="btn" disabled={alreadyExists} onClick={() => onAdd(month, copy)}>
+          <button className="btn" disabled={alreadyExists || !isMonthId(month)} onClick={() => { if (isMonthId(month)) onAdd(month, copy) }}>
             Add Month
           </button>
         </div>

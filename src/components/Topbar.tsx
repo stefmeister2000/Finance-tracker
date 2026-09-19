@@ -1,6 +1,6 @@
 import type { AppData } from '../types'
 import type { View } from '../App'
-import { greeting, monthLabel } from '../storage'
+import { monthLabel } from '../storage'
 
 interface Props {
   data: AppData
@@ -21,11 +21,11 @@ function viewSubtitle(view: View): string {
     case 'networth':
       return 'Track every asset and liability you own.'
     case 'subscriptions':
-      return "Here's what you're paying for, automatically detected."
+      return "Your subscriptions, organised in one place. You decide what belongs here."
     case 'budget':
-      return 'Plan your fixed and variable monthly costs.'
+      return 'Your recurring income, regular bills and monthly spending plan.'
     case 'invoices':
-      return 'Track money owed to and by the business.'
+      return 'Your invoices and accounting files, organised by month.'
     case 'adspend':
       return 'Track ad spend, revenue, and what performs best.'
     case 'influencers':
@@ -43,8 +43,14 @@ function viewSubtitle(view: View): string {
     case 'tools':
       return 'VAT, margin, and break-even calculators for your business.'
     case 'contracts':
-      return 'Store and manage all your business contracts and agreements.'
+      return 'Upload agreements, organise files, and update their details directly.'
   }
+}
+
+const PAGE_TITLES: Record<Exclude<View['type'], 'month'>, string> = {
+  overview: 'Overview', networth: 'Net worth', subscriptions: 'Subscriptions', budget: 'Fixed costs & income',
+  invoices: 'Invoices & files', adspend: 'Ad performance', influencers: 'Influencers & affiliates', retail: 'Retail & wholesale',
+  funding: 'Funding', model: 'Financial model', inventory: 'Inventory & supply', startup: 'Startup costs', tools: 'Business tools', contracts: 'Contracts',
 }
 
 export default function Topbar({ data, view, onUndo, onRedo, canUndo, canRedo }: Props) {
@@ -52,7 +58,7 @@ export default function Topbar({ data, view, onUndo, onRedo, canUndo, canRedo }:
     <div className="topbar">
       <div>
         <h1>
-          {greeting()}, {data.userName || 'there'}
+          {view.type === 'month' ? monthLabel(view.id) : PAGE_TITLES[view.type]}
         </h1>
         <p className="subtitle">{viewSubtitle(view)}</p>
       </div>

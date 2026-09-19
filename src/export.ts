@@ -93,6 +93,9 @@ export function fixedCostsRows(ws: WorkspaceData): Rows {
   const rows: Rows = [['Type', 'Category', 'Name', 'Monthly cost', 'Currency']]
   for (const f of ws.fixedCosts ?? []) rows.push([f.type, f.category, f.name, n2(f.monthlyCost), ws.currency])
   for (const f of ws.fixedIncome ?? []) rows.push(['income', f.category, f.name, n2(f.monthlyCost), ws.currency])
+  for (const c of ws.kind === 'personal' ? ws.freelanceClients ?? [] : []) {
+    if (c.fixedIncome) rows.push(['income', 'Freelance', c.client, n2(c.amount), ws.currency])
+  }
   return rows
 }
 
@@ -149,7 +152,7 @@ export function receivablesRows(ws: WorkspaceData): Rows {
 
 export function freelanceRows(ws: WorkspaceData): Rows {
   const rows: Rows = [['Client', 'Work', 'Amount', 'Payment date', 'Paid', 'Currency']]
-  for (const c of ws.freelanceClients ?? []) rows.push([c.client, c.description ?? '', n2(c.amount), c.paymentDate ?? '', c.paid ? 'yes' : 'no', ws.currency])
+  for (const c of ws.kind === 'personal' ? ws.freelanceClients ?? [] : []) rows.push([c.client, c.description ?? '', n2(c.amount), c.paymentDate ?? '', c.paid ? 'yes' : 'no', ws.currency])
   return rows
 }
 
@@ -222,7 +225,7 @@ export const EXPORTS: Exportable[] = [
   { key: 'transactions', label: 'Transactions (all months)', build: transactionsRows, has: (w) => Object.values(w.months).some((m) => m.transactions.length > 0) },
   { key: 'invoices', label: 'Invoices', build: invoicesRows, has: (w) => (w.invoices ?? []).length > 0 },
   { key: 'products', label: 'Products & margins', build: productsRows, has: (w) => (w.products ?? []).length > 0 },
-  { key: 'fixed-costs', label: 'Fixed costs & income', build: fixedCostsRows, has: (w) => (w.fixedCosts ?? []).length > 0 || (w.fixedIncome ?? []).length > 0 },
+  { key: 'fixed-costs', label: 'Fixed costs & income', build: fixedCostsRows, has: (w) => (w.fixedCosts ?? []).length > 0 || (w.fixedIncome ?? []).length > 0 || (w.kind === 'personal' && (w.freelanceClients ?? []).some((c) => c.fixedIncome)) },
   { key: 'assumptions', label: 'Financial model — assumptions', build: assumptionsRows, has: () => true },
   { key: 'summary-base', label: 'Financial plan — annual summary (base)', build: (w) => annualSummaryRows(w, 'base'), has: () => true },
   { key: 'summary-downside', label: 'Financial plan — annual summary (downside)', build: (w) => annualSummaryRows(w, 'downside'), has: () => true },
@@ -235,7 +238,7 @@ export const EXPORTS: Exportable[] = [
   { key: 'retail', label: 'Retail partners', build: retailRows, has: (w) => (w.retailPartners ?? []).length > 0 },
   { key: 'influencers', label: 'Influencers', build: influencersRows, has: (w) => (w.influencers ?? []).length > 0 },
   { key: 'receivables', label: 'Owed to you', build: receivablesRows, has: (w) => (w.receivables ?? []).length > 0 },
-  { key: 'freelance', label: 'Freelance clients', build: freelanceRows, has: (w) => (w.freelanceClients ?? []).length > 0 },
+  { key: 'freelance', label: 'Freelance clients', build: freelanceRows, has: (w) => w.kind === 'personal' && (w.freelanceClients ?? []).length > 0 },
 ]
 
 export function exportOne(ws: WorkspaceData, e: Exportable) {

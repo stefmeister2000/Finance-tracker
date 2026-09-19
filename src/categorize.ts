@@ -187,13 +187,14 @@ export function guessEntryType(
 
 // Maps lowercase keywords found in a net worth account's name to a default category name.
 const NET_WORTH_KEYWORDS: [string[], string][] = [
-  [['kucoin', 'binance', 'ledger', 'metamask', 'crypto', 'wallet', 'degiro', 'etoro', 'broker', 'invest', 'trading', 'stocks', 'shares'], 'Investments'],
-  [['house', 'apartment', 'property', 'real estate', 'home'], 'Real Estate'],
-  [['car', 'vehicle', 'bike', 'motorcycle', 'scooter'], 'Vehicle'],
-  [['watch', 'rolex', 'jewel', 'collectible', 'art'], 'Other Asset'],
-  [['credit card'], 'Credit Card'],
-  [['loan', 'mortgage'], 'Loan'],
-  [['bank', 'cash', 'account', 'revolut', 'kbc', 'argenta', 'hellenic'], 'Cash & Bank'],
+  [['kucoin', 'binance', 'ledger', 'metamask', 'meta mask', 'crypto', 'wallet'], 'Cryptocurrency'],
+  [['degiro', 'etoro', 'broker', 'invest', 'trading', 'stocks', 'shares'], 'Stocks & funds'],
+  [['house', 'apartment', 'property', 'real estate', 'home'], 'Property'],
+  [['car', 'vehicle', 'bike', 'motorcycle', 'scooter'], 'Vehicles'],
+  [['watch', 'rolex', 'jewel', 'collectible', 'art'], 'Valuables & collectibles'],
+  [['credit card'], 'Credit card debt'],
+  [['loan', 'mortgage'], 'Loans & mortgages'],
+  [['bank', 'cash', 'account', 'revolut', 'kbc', 'argenta', 'hellenic'], 'Cash & bank accounts'],
 ]
 
 /** Suggests a net worth category id for an account based on its name and asset/liability type. */
@@ -209,7 +210,7 @@ export function guessNetWorthCategory(
       if (match) return match.id
     }
   }
-  const fallbackName = account.type === 'asset' ? 'Other Asset' : 'Other Liability'
+  const fallbackName = account.type === 'asset' ? 'Other assets' : 'Other debts'
   const fallback = sameType.find((c) => c.name.toLowerCase() === fallbackName.toLowerCase())
   return fallback?.id ?? sameType[0]?.id
 }

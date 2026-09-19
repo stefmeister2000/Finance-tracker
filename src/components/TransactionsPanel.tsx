@@ -30,6 +30,16 @@ export default function TransactionsPanel({ data, ws, setData, monthId }: Props)
   const [categoryFilter, setCategoryFilter] = useState('all')
   const [typeFilter, setTypeFilter] = useState<'all' | 'income' | 'expense' | 'ignore'>('all')
   const [flaggedOnly, setFlaggedOnly] = useState(false)
+  // Transactions temporarily excluded from the card totals (view-only what-if, not saved).
+  const [excluded, setExcluded] = useState<Set<string>>(new Set())
+  function toggleExcluded(id: string) {
+    setExcluded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
   const categoryById = useMemo(() => new Map(ws.categories.map((c) => [c.id, c])), [ws.categories])
@@ -539,8 +549,10 @@ export default function TransactionsPanel({ data, ws, setData, monthId }: Props)
       {ws.cards.map((card) => {
         const txs = (groups.get(card.id) ?? []).slice().sort((a, b) => a.date.localeCompare(b.date))
         if (cardFilter !== 'all' && cardFilter !== card.id) return null
-        const income = txs.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0)
-        const expense = txs.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0)
+        const kept = txs.filter((t) => !excluded.has(t.id))
+        const income = kept.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0)
+        const expense = kept.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0)
+        const excludedHere = txs.filter((t) => excluded.has(t.id)).length
 
         return (
           <div className="panel" key={card.id}>
@@ -548,8 +560,13 @@ export default function TransactionsPanel({ data, ws, setData, monthId }: Props)
               <h2>
                 <span className="dot" style={{ background: card.color, marginRight: 8 }} />
                 {card.name}
+                {excludedHere > 0 && (
+                  <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 400, marginLeft: 8 }}>
+                    ({excludedHere} excluded)
+                  </span>
+                )}
               </h2>
-              <div style={{ display: 'flex', gap: 16, fontSize: 13 }}>
+              <div style={{ display: 'flex', gap: 16, fontSize: 13, alignItems: 'center' }}>
                 <span className="positive value" style={{ fontSize: 14 }}>
                   +{fmt(income)}
                 </span>
@@ -559,6 +576,9 @@ export default function TransactionsPanel({ data, ws, setData, monthId }: Props)
                 <span className="value" style={{ fontSize: 14 }}>
                   = {fmt(income - expense)}
                 </span>
+                {excludedHere > 0 && (
+                  <button className="btn ghost small" onClick={() => setExcluded(new Set())} title="Bring all excluded transactions back">Reset</button>
+                )}
               </div>
             </div>
             {txs.length === 0 ? (
@@ -586,8 +606,9 @@ export default function TransactionsPanel({ data, ws, setData, monthId }: Props)
                   <tbody>
                     {txs.map((t) => {
                       const cat = categoryById.get(t.categoryId)
+                      const isExcluded = excluded.has(t.id)
                       return (
-                        <tr key={t.id} style={t.flagged ? { background: '#f59e0b12' } : undefined}>
+                        <tr key={t.id} style={{ ...(t.flagged ? { background: '#f59e0b12' } : {}), ...(isExcluded ? { opacity: 0.4 } : {}) }}>
                           <td>
                             <input
                               type="checkbox"
@@ -682,6 +703,14 @@ export default function TransactionsPanel({ data, ws, setData, monthId }: Props)
                                 })}
                               </select>
                             )}
+                            <button
+                              className="btn ghost small"
+                              onClick={() => toggleExcluded(t.id)}
+                              title={isExcluded ? 'Include in total again' : 'Exclude from the total (to see the cost without it)'}
+                              style={isExcluded ? { color: 'var(--accent)', borderColor: 'var(--accent)' } : undefined}
+                            >
+                              {isExcluded ? '↩' : '⊘'}
+                            </button>
                             <button
                               className="btn ghost small"
                               onClick={() => toggleFlag(t.id)}
